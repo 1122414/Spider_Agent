@@ -1,0 +1,8 @@
+{
+  // "python.defaultInterpreterPath": "D:\\Anaconda\\envs\\spider_agent\\python.exe",
+  // "python.terminal.activateEnvironment": true,
+  // "python.terminal.executeInFileDir": true,
+  "python-envs.defaultEnvManager": "ms-python.python:conda",
+  "python-envs.defaultPackageManager": "ms-python.python:conda",
+  "python-envs.pythonProjects": []
+}
