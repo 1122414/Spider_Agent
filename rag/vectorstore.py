@@ -1,19 +1,17 @@
-from chromadb import Client
-from chromadb.config import Settings
-from langchain.vectorstores import Chroma
-from langchain.embeddings.base import Embeddings
 import os
+import chromadb
+from dotenv import load_dotenv
+from chromadb.config import Settings
+from langchain.embeddings.base import Embeddings
+from langchain_community.vectorstores import Chroma
 
-CHROMA_URL = os.environ.get("CHROMA_URL", "http://localhost:8000")
-CHROMA_API_KEY = os.environ.get("CHROMA_API_KEY", None)
+load_dotenv()
+
+VECTOR_DB_HOST = os.environ.get("VECTOR_DB_HOST", "localhost")
+VECTOR_DB_PORT = os.environ.get("VECTOR_DB_PORT", 7070)
 
 def get_chroma_client():
-    client = Client(Settings(
-        chroma_server_host=CHROMA_URL.split(":")[1].strip("//"),
-        chroma_server_http_port=int(CHROMA_URL.split(":")[-1]),
-        chroma_server_ssl=False,
-        chroma_server_api_key=CHROMA_API_KEY
-    ))
+    client = chromadb.HttpClient(host=VECTOR_DB_HOST, port=VECTOR_DB_PORT)
     return client
 
 def get_chroma_client_and_store(collection_name: str, embeddings: Embeddings):

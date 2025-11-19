@@ -5,4 +5,4 @@
 ## 快速开始
 
 1. 复制 `.env.example` 为 `.env` 并填写 `OPENAI_API_KEY` 等配置。
-2. 启动 Qdrant：
+2. chroma run --path ./chroma_data --host 0.0.0.0 --port 7070

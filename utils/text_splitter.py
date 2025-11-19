@@ -6,7 +6,7 @@ def sentence_split(text: str) -> List[str]:
     # 首先替换多空格
     text = re.sub(r'\s+', ' ', text).strip()
     # split by punctuation
-    parts = re.split(r'(?<=[。！？\?\.\!；;])\s*', text)
+    parts = re.split(r'(?<=[。！？\?\!；;])\s*', text)
     parts = [p.strip() for p in parts if p.strip()]
     return parts
 

@@ -1,8 +1,11 @@
-from langchain.chat_models import ChatOpenAI
-from langchain.chains import RetrievalQA, ConversationalRetrievalChain
-from langchain.embeddings import OpenAIEmbeddings
-from rag.vectorstore import get_chroma_client_and_store
 import os
+from dotenv import load_dotenv
+from langchain_openai import ChatOpenAI
+from langchain.chains import RetrievalQA, ConversationalRetrievalChain
+from langchain_openai import OpenAIEmbeddings
+from rag.vectorstore import get_chroma_client_and_store
+
+load_dotenv()
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 MODEL = os.environ.get("LLM_MODEL", "gpt-4o-mini")
