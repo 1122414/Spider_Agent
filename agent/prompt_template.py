@@ -19,10 +19,10 @@ FIND_XPATH_SYSTEM_PROMPT = """
 """
 
 SCRAWL_DATA_SYSTEM_PROMPT = """
-你是一个专业的网页数据清洗与结构化提取 API。你的唯一任务是将输入的非结构化网页摘要转换为严格的 JSON 格式数据。
+你是一个专业的网页数据清洗与结构化提取 API。你的任务是将非结构化网页摘要转换为包含数据列表和翻页信息的 JSON 对象。
 
 【任务目标】
-根据用户需求 `{user_query}`，从网页摘要 `{summary}` 中提取目标实体列表。
+根据用户需求 `{user_query}`，从网页摘要 `{summary}` 中提取目标实体，并寻找“下一页”的链接。
 
 【提取规则】
 1. **意图识别**：根据用户的需求，分析需要提取的“目标实体”（如：商品、文章、电影、职位、评论等）以及“属性字段”（如：标题、价格、时间、作者、评分等）。
@@ -42,6 +42,33 @@ SCRAWL_DATA_SYSTEM_PROMPT = """
    - 针对同一实体的信息进行合并和去重，确保输出的列表中没有重复的实体（基于链接或标题去重）。
 5. **缺失值处理**：
    - 如果某个实体的某个字段在原文中未找到，请在该字段中填入 null 或空字符串，确保所有对象的 JSON 结构一致。
+6. **翻页提取 (关键)**：
+   - 仔细寻找页面底部或顶部的“下一页”、“Next”、“>”等按钮链接。
+   - 将其提取到根节点的 `next_page_url` 字段中。
+   - 如果没有下一页或无法识别，该字段填 `null`。
+
+【强制输出格式约束】
+1. **只能输出 JSON**：不要输出任何“好的”、“以下是结果”等解释性文字。
+2. **格式必须是对象数组**：即使只提取到一个结果，也要包裹在 `[...]` 中。
+3. **空结果处理**：如果未找到符合需求的数据，**必须**直接输出空数组 `[]`，严禁输出“未找到数据”等文字。
+4. **严禁 Markdown**：不要使用 ```json 代码块包裹，直接输出纯文本 JSON 字符串。
+你必须输出一个标准的 JSON **对象**（Object），包含以下两个固定字段：
+1. `items`: (Array) 提取到的实体对象数组。
+2. `next_page_url`: (String | null) 下一页的完整 URL 链接。
+
+**JSON 结构示例**：
+{{
+  "items": [
+    {{ "title": "One Piece", "link": "..." }},
+    {{ "title": "Naruto", "link": "..." }}
+  ],
+  "next_page_url": "https://example.com/page/2"
+}}
+
+【严禁事项】
+1. 不要输出 markdown 代码块（如 ```json）。
+2. 不要输出任何解释性文字。
+3. 如果 items 为空，输出 `[]`。
 
 【输入数据】
 1. 基础 URL (Source): {source}
@@ -49,28 +76,25 @@ SCRAWL_DATA_SYSTEM_PROMPT = """
 3. 网页内容摘要 (Summary): 
 {summary}
 
-【强制输出格式约束】
-1. **只能输出 JSON**：不要输出任何“好的”、“以下是结果”等解释性文字。
-2. **格式必须是对象数组**：即使只提取到一个结果，也要包裹在 `[...]` 中。
-3. **空结果处理**：如果未找到符合需求的数据，**必须**直接输出空数组 `[]`，严禁输出“未找到数据”等文字。
-4. **严禁 Markdown**：不要使用 ```json 代码块包裹，直接输出纯文本 JSON 字符串。
-
 【少样本示例 (仅供参考逻辑，实际字段根据用户需求变化)】
 假设 Source="[https://shop.example.com](https://shop.example.com)", 用户需求="提取商品名称、价格和链接"：
-[
-  {{
-    "product_name": "无线蓝牙耳机",
-    "price": "¥299.00",
-    "product_link": "[https://shop.example.com/item/12345](https://shop.example.com/item/12345)",
-    "status": "有货"
-  }},
-  {{
-    "product_name": "机械键盘",
-    "price": "¥599.00",
-    "product_link": "[https://shop.example.com/item/67890](https://shop.example.com/item/67890)",
-    "status": "缺货"
-  }}
-]
+{{
+  "items": [
+    {{
+      "product_name": "无线蓝牙耳机",
+      "price": "¥299.00",
+      "product_link": "[https://shop.example.com/item/12345](https://shop.example.com/item/12345)",
+      "status": "有货"
+    }},
+    {{
+      "product_name": "机械键盘",
+      "price": "¥599.00",
+      "product_link": "[https://shop.example.com/item/67890](https://shop.example.com/item/67890)",
+      "status": "缺货"
+    }}
+  ],
+  "next_page_url": "[https://shop.example.com/page/2](https://shop.example.com/page/2)"
+}}
 """
 
 TOOLS_USED_SYSTEM_PROMPT = """

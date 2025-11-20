@@ -53,6 +53,7 @@ async def playwright_fetch(
 ) -> Dict:
     """
     [基础爬虫] 使用 Playwright 提取单页面内容
+    返回结构包含 extractor 的原始返回 (items + next_page_url)
     """
     print(f"🕷️ Fetching: {url}")
     
@@ -102,9 +103,10 @@ async def playwright_fetch(
 
     try:
         extractor = ExtractorAgent()
+        # ExtractorAgent 现在返回 {"items": [...], "next_page_url": ...}
         target_content = extractor.get_content(pure_text, target, url)
     except Exception as e:
-        target_content = f"Extraction Failed: {str(e)}"
+        target_content = {"items": [], "next_page_url": None, "error": str(e)}
 
     return {
         "url": url,
@@ -113,129 +115,192 @@ async def playwright_fetch(
     }
 
 async def _recursive_crawl_logic(
-    current_url: str,
+    start_url: str,
     pipelines: List[List[str]], # 每一层的提取目标
     current_depth: int,
     max_items: int,
-    visited_urls: Set[str]
+    visited_urls: Set[str],
+    max_pages: int = 3  # 新增：最大翻页数
 ) -> Union[List[Dict], Dict, str]:
     """
-    [内部递归函数] 处理多层级爬取逻辑
+    [内部递归函数] 处理多层级爬取逻辑，支持翻页
     """
     # 1. 边界检查
     if current_depth >= len(pipelines):
-        return None # 超过预设深度，停止
+        return None 
 
     target = pipelines[current_depth]
-    # 只有列表页才需要滚动，详情页通常不需要
-    scrolls = 1 if current_depth == 0 else 0 
+    # 只有列表页(Depth 0)或明确需要翻页的层级才滚动
+    scrolls = 1 
     
-    # 2. 爬取当前层
-    # 自动给每一层加上 "link" 相关的提取提示，方便下一层钻取
+    # 自动给每一层加上链接提取提示
     enhanced_target = target + ["link", "url", "href", "链接", "跳转链接"]
     
-    fetch_result = await playwright_fetch(current_url, enhanced_target, max_scrolls=scrolls)
+    all_layer_results = []
+    current_page_url = start_url
+    page_count = 0
+
+    # ============================
+    # 分页循环 (Pagination Loop)
+    # ============================
+    while current_page_url and page_count < max_pages:
+        # 去重检查 (针对列表页本身)
+        normalized_current = _normalize_url(current_page_url)
+        if normalized_current in visited_urls:
+             print(f"   ⚠️ [Depth {current_depth}] Page visited, stopping pagination: {current_page_url}")
+             break
+        visited_urls.add(normalized_current)
+
+        if page_count > 0:
+            print(f"   📄 [Depth {current_depth}] Flipping to Page {page_count + 1}: {current_page_url}")
+
+        # 2. 爬取当前页
+        fetch_result = await playwright_fetch(current_page_url, enhanced_target, max_scrolls=scrolls)
+        
+        if "error" in fetch_result and fetch_result["error"]:
+            print(f"   ❌ Fetch error at {current_page_url}: {fetch_result['error']}")
+            break
+
+        extracted_data = fetch_result.get("target_content", {})
+        
+        # 兼容性处理：确保拿到 items 列表和 next_page_url
+        items = []
+        next_link = None
+
+        if isinstance(extracted_data, dict):
+            items = extracted_data.get("items", [])
+            next_link = extracted_data.get("next_page_url")
+            # 如果旧版 extractor 返回了 content 放在其他字段，做个兼容（视 Extractor 实现而定）
+        elif isinstance(extracted_data, list):
+            items = extracted_data # 旧版兼容
+        
+        # 3. 处理当前页的 items
+        # 如果不是最后一层，需要递归深入
+        if current_depth < len(pipelines) - 1:
+            processed_items = await _process_items_recursively(
+                items, 
+                current_page_url, 
+                pipelines, 
+                current_depth, 
+                max_items, 
+                visited_urls,
+                max_pages
+            )
+            all_layer_results.extend(processed_items)
+        else:
+            # 最后一层，直接收集数据
+            all_layer_results.extend(items)
+
+        # 4. 准备下一页
+        if next_link:
+            # 拼接完整 URL
+            next_full_url = urljoin(current_page_url, next_link)
+            
+            # 防止原地踏步
+            if _normalize_url(next_full_url) == normalized_current:
+                print("   ⚠️ Next page is same as current, stopping.")
+                break
+                
+            current_page_url = next_full_url
+            page_count += 1
+        else:
+            # 没有下一页了
+            break
     
-    if "error" in fetch_result and fetch_result["error"]:
-        return {"error": fetch_result["error"], "url": current_url}
+    return all_layer_results
 
-    extracted_data = fetch_result.get("target_content")
-
-    # 3. 如果是最后一层，直接返回数据
-    if current_depth == len(pipelines) - 1:
-        return extracted_data
-
-    # 4. 准备进入下一层
-    # 兼容处理：如果提取结果是单个字典，转为列表统一处理
-    items = []
-    if isinstance(extracted_data, list):
-        items = extracted_data
-    elif isinstance(extracted_data, dict):
-        items = [extracted_data]
-    else:
-        # 如果提取结果是纯文本或其他，无法继续深入，直接返回
-        return extracted_data
-
-    # 5. 遍历当前层条目，寻找链接进入下一层
+async def _process_items_recursively(
+    items: List[Dict], 
+    base_url: str,
+    pipelines: List[List[str]],
+    current_depth: int,
+    max_items: int,
+    visited_urls: Set[str],
+    max_pages: int
+) -> List[Dict]:
+    """
+    辅助函数：遍历 items 并递归调用下一层
+    """
     results = []
     count = 0
-    
-    # 常见的链接字段名
     link_keys = ["link", "url", "href", "链接", "详情页链接", "线路链接", "播放链接", "full_url"]
 
     for item in items:
-        # 超过最大数量限制则停止本层遍历
+        if not isinstance(item, dict):
+            results.append({"raw": item})
+            continue
+            
         if count >= max_items:
             break
             
-        processed_item = item.copy() if isinstance(item, dict) else {"raw": item}
+        processed_item = item.copy()
         
         # A. 寻找下一层链接
         next_url = None
-        if isinstance(item, dict):
-            for key in link_keys:
-                if key in item and item[key] and isinstance(item[key], str):
-                    candidate = item[key].strip()
-                    if len(candidate) > 1:
-                        next_url = candidate
-                        break
+        for key in link_keys:
+            if key in item and item[key] and isinstance(item[key], str):
+                candidate = item[key].strip()
+                if len(candidate) > 1:
+                    next_url = candidate
+                    break
         
-        # B. 如果找到链接，递归钻取
+        # B. 递归钻取
         if next_url:
-            # 拼接完整 URL
-            full_next_url = urljoin(current_url, next_url)
+            full_next_url = urljoin(base_url, next_url)
             normalized_next = _normalize_url(full_next_url)
 
             if normalized_next not in visited_urls:
                 print(f"   👉 [Depth {current_depth}->{current_depth+1}] Digging: {full_next_url}")
+                # 注意：这里不需要把详情页加入 visited_urls 也是可以的，取决于是否允许不同列表项指向同一详情页
+                # 这里加入是为了防环
                 visited_urls.add(normalized_next)
                 
-                # 【递归调用】
                 sub_data = await _recursive_crawl_logic(
                     full_next_url, 
                     pipelines, 
                     current_depth + 1, 
                     max_items, 
-                    visited_urls
+                    visited_urls,
+                    max_pages
                 )
                 
-                # 将下一层数据挂载到当前 item 的 "children" 字段
-                # 或者如果下一层返回的是字典（合并），视情况而定。这里统一挂在 children 下结构最清晰。
                 processed_item["children"] = sub_data
                 count += 1
             else:
                 processed_item["info"] = "URL visited or repeated"
         
         results.append(processed_item)
-
+    
     return results
 
 async def hierarchical_crawl(
     url: str, 
     crawl_scopes: List[List[str]], 
-    max_items: int = 3
+    max_items: int = 3,
+    max_pages: int = 3
 ) -> Dict:
     """
     [多层级深度爬虫 - 异步入口]
     参数:
       url: 起始 URL
-      crawl_scopes: 每一层的提取目标列表。
-         例如: [ ["动漫标题", "链接"], ["线路链接", "线路名"], ["评论", "视频标题"] ]
-      max_items: 每一层最大抓取数量（防止指数级爆炸）
+      crawl_scopes: 提取目标二维数组
+      max_items: 每一层递归抓取的最大条目数
+      max_pages: 每一层列表页的最大翻页数
     """
     print(f"🚀 [Multi-Level] 启动多层爬取: {url}")
-    print(f"   Pipeline Depth: {len(crawl_scopes)} 层")
+    print(f"   Pipeline Depth: {len(crawl_scopes)} 层 | Max Pages: {max_pages}")
 
     visited_urls = set()
-    visited_urls.add(_normalize_url(url))
+    # visited_urls.add(_normalize_url(url)) # 移到递归内部处理，防止第一页就被跳过
 
     # 开始递归
     final_data = await _recursive_crawl_logic(
         url, 
-        crawl_scopes, 
+        pipelines=crawl_scopes, 
         current_depth=0, 
         max_items=max_items, 
-        visited_urls=visited_urls
+        visited_urls=visited_urls,
+        max_pages=max_pages
     )
 
     return {
@@ -263,8 +328,8 @@ def sync_playwright_fetch(url: str, target: List[str], max_scrolls: int = 0) -> 
     """基础爬虫入口"""
     return _run_async(playwright_fetch(url, target, max_scrolls=max_scrolls))
 
-def sync_hierarchical_crawl(url: str, crawl_scopes: List[List[str]], max_items: int = 3) -> Dict:
+def sync_hierarchical_crawl(url: str, crawl_scopes: List[List[str]], max_items: int = 3, max_pages: int = 3) -> Dict:
     """
-    多层级爬虫入口，支持任意层级
+    [新版] 多层级爬虫入口，支持翻页参数
     """
-    return _run_async(hierarchical_crawl(url, crawl_scopes, max_items))
+    return _run_async(hierarchical_crawl(url, crawl_scopes, max_items, max_pages))

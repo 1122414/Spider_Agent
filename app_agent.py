@@ -47,7 +47,8 @@ def setup_system():
         - url: 起始网址。
         - crawl_scopes: 一个二维数组，定义每一层的抓取目标。
           例如抓取3层: [ ["动漫名", "链接"], ["播放线路链接"], ["评论内容", "点赞"] ]
-        - max_items: 限制每一层的抓取数量，默认3。
+        - max_items: 每一层递归抓取的最大条目数
+        - max_pages: 每一层列表页的最大翻页数
         """,
         func=sync_hierarchical_crawl
     )
