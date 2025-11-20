@@ -1,7 +1,7 @@
 import os
 import json
 from dotenv import load_dotenv
-from agent.langchain_agent import run_agent_task
+from abandon.langchain_agent import run_agent_task
 from rag.retriever_qa import qa_interaction
 
 load_dotenv()
