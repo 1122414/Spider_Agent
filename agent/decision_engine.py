@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Dict, List, Any
 from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
@@ -15,6 +16,39 @@ class DecisionEngine:
         # 设置最大步数防止死循环
         self.max_steps = 10
     
+    def _parse_json_safely(self, text: str) -> Dict[str, Any]:
+        """
+        【新增】鲁棒的 JSON 解析器
+        能够处理 LLM 返回的各种非标准 JSON 格式（Markdown 包裹、前后有废话等）
+        """
+        text = text.strip()
+        
+        # 策略 1: 尝试直接解析
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+        # 策略 2: 去除常见的 Markdown 代码块标记
+        try:
+            cleaned = text.replace("```json", "").replace("```", "").strip()
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            pass
+
+        # 策略 3: 使用正则表达式提取第一个 JSON 对象 {...}
+        # [\s\S]* 匹配任意字符包括换行
+        try:
+            match = re.search(r'\{[\s\S]*\}', text)
+            if match:
+                potential_json = match.group(0)
+                return json.loads(potential_json)
+        except json.JSONDecodeError:
+            pass
+        
+        # 如果都失败了，抛出异常供上层捕获
+        raise ValueError(f"无法从 LLM 响应中提取有效 JSON。响应预览: {text[:100]}...")
+
     def think_and_act(self, task: str) -> Dict[str, Any]:
         """ReAct决策循环的核心实现"""
         print(f"🎯 收到新任务: {task}")
@@ -38,7 +72,6 @@ class DecisionEngine:
             recent_history_str = json.dumps(raw_history, ensure_ascii=False, indent=2)
             
             # 2. 构造 Prompt
-            # 注意：TOOLS_USED_SYSTEM_PROMPT 需要包含 {tools_list}, {recent_history}, {task}
             system_prompt = TOOLS_USED_SYSTEM_PROMPT.replace(
                 "{tools_list}", tools_list
             ).replace(
@@ -51,23 +84,18 @@ class DecisionEngine:
             try:
                 response = self.llm.invoke([
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": "请根据当前状态和任务目标，决定下一步行动 (next) 或 结束任务 (stop)。"}
+                    {"role": "user", "content": "请根据当前状态和任务目标，严格以 JSON 格式决定下一步行动 (next) 或 结束任务 (stop)。"}
                 ])
                 
                 content = response.content.strip()
-                # 清洗 markdown 格式 (例如 ```json ... ```)
-                if content.startswith("```json"):
-                    content = content[7:]
-                if content.startswith("```"):
-                    content = content[3:]
-                if content.endswith("```"):
-                    content = content[:-3]
                 
-                decision = json.loads(content.strip())
+                # 使用增强的解析器
+                decision = self._parse_json_safely(content)
                 
             except Exception as e:
                 print(f"❌ 决策解析失败: {e}")
-                return {"status": "error", "message": str(e)}
+                # 可以选择重试，或者直接报错返回
+                return {"status": "error", "message": f"Decision parse failed: {str(e)}"}
             
             # 4. 执行决策
             action = decision.get("action")

@@ -253,7 +253,6 @@ async def _process_items_recursively(
                 print(f"   👉 [Depth {current_depth}->{current_depth+1}] Digging: {full_next_url}")
                 # 注意：这里不需要把详情页加入 visited_urls 也是可以的，取决于是否允许不同列表项指向同一详情页
                 # 这里加入是为了防环
-                visited_urls.add(normalized_next)
                 
                 sub_data = await _recursive_crawl_logic(
                     full_next_url, 
@@ -263,6 +262,8 @@ async def _process_items_recursively(
                     visited_urls,
                     max_pages
                 )
+
+                visited_urls.add(normalized_next)
                 
                 processed_item["children"] = sub_data
                 count += 1
