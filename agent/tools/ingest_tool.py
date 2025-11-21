@@ -16,7 +16,7 @@ load_dotenv()
 # 配置
 MILVUS_URI = os.environ.get("MILVUS_URI", "http://localhost:19530")
 COLLECTION_NAME = "spider_knowledge_base"
-EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
+EMBEDDING_MODEL = os.environ.get("MODA_EMBEDDING_MODEL", "text-embedding-3-small")
 OPENAI_API_KEY = os.environ.get("MODA_OPENAI_API_KEY")
 OPENAI_BASE_URL = os.environ.get("MODA_OPENAI_BASE_URL")
 
