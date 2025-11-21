@@ -5,7 +5,8 @@ import json
 from typing import List, Dict, Any, Set, Union
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
-from langchain.prompts import PromptTemplate
+# 修复导入路径，避免 ImportError
+from langchain_core.prompts import PromptTemplate
 from agent.prompt_template import SCRAWL_DATA_SYSTEM_PROMPT
 
 load_dotenv()
@@ -67,7 +68,7 @@ class ExtractorAgent:
                 detected_next_page = chunk_result["next_page_url"]
                 print(f"      🔎 第 {i+1} 块发现了翻页链接: {detected_next_page}")
 
-        print(f"📦 分块提取完成，总条数: {len(all_items)}")
+        print(f"📦 分块提取完成，原始总条数: {len(all_items)}")
 
         # 全局去重
         final_items = self._deduplicate_items(all_items)
@@ -84,6 +85,7 @@ class ExtractorAgent:
         prompt = PromptTemplate.from_template(SCRAWL_DATA_SYSTEM_PROMPT)
         
         try:
+            # user_query 转字符串，避免由列表引发格式问题
             resp = self.llm.invoke(prompt.format(user_query=str(target), summary=chunk_text, source=source))
             content = resp.content.strip()
         except Exception as e:
@@ -103,7 +105,7 @@ class ExtractorAgent:
                 final_structure["next_page_url"] = raw_result.get("next_page_url")
             # 情况 B: LLM 还是返回了旧格式的单个对象 (虽然 Prompt 禁止了)
             elif "items" not in raw_result: 
-                 # 尝试把整个 dict 当作一个 item
+                 # 尝试把整个 dict 当作一个 item，排除 error 字段的情况
                  if "error" not in raw_result:
                      final_structure["items"] = [raw_result]
 
@@ -114,7 +116,7 @@ class ExtractorAgent:
         return final_structure
 
     def _split_text_by_lines(self, text: str, max_length: int) -> List[str]:
-        """按行切分文本"""
+        """按行切分文本，防止切断 JSON 结构或 Markdown 行"""
         lines = text.split('\n')
         chunks = []
         current_chunk = []
@@ -144,28 +146,29 @@ class ExtractorAgent:
 
     def _parse_json_safely(self, text: str) -> Union[List, Dict]:
         """安全解析 JSON"""
-        # 尝试直接解析
+        # 1. 尝试直接解析
         try:
             return json.loads(text)
         except:
             pass
 
-        # 清洗 Markdown
+        # 2. 清洗 Markdown 代码块标记
         cleaned = text.replace("```json", "").replace("```", "").strip()
         try:
             return json.loads(cleaned)
         except:
             pass
 
-        # 正则提取：优先尝试提取对象结构 {...} (新 Prompt 要求返回对象)
+        # 3. 正则提取：优先尝试提取对象结构 {...} (新 Prompt 要求返回对象)
         try:
+            # dotall 模式，让 . 匹配换行符
             match = re.search(r'\{[\s\S]*\}', text) 
             if match:
                 return json.loads(match.group(0))
         except:
             pass
 
-        # 正则提取：兜底尝试提取数组 [...] (防止 LLM 抽风)
+        # 4. 正则提取：兜底尝试提取数组 [...] (防止 LLM 返回旧格式)
         try:
             match = re.search(r'\[[\s\S]*\]', text)
             if match:
@@ -202,5 +205,5 @@ class ExtractorAgent:
                 unique_items.append(item)
         
         if len(items) != len(unique_items):
-            print(f"🔍 去重优化: {len(items)} -> {len(unique_items)} 条")
+            print(f"🔍 ExtractorAgent 全局去重: {len(items)} -> {len(unique_items)} 条")
         return unique_items

@@ -1,29 +1,73 @@
 import os
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
-from langchain.chains import RetrievalQA, ConversationalRetrievalChain
-from langchain_openai import OpenAIEmbeddings
-from rag.vectorstore import get_chroma_client_and_store
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_milvus import Milvus
+from langchain_core.prompts import PromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
 
 load_dotenv()
 
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-MODEL = os.environ.get("LLM_MODEL", "gpt-4o-mini")
-EMBED_MODEL = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
-COLLECTION = os.environ.get("COLLECTION_NAME", "auto_crawler_collection")
+# 配置
+MILVUS_URI = os.environ.get("MILVUS_URI", "http://localhost:19530")
+COLLECTION_NAME = "spider_knowledge_base"
+EMBEDDING_MODEL = os.environ.get("MODA_EMBEDDING_MODEL", "text-embedding-3-small")
+MODEL_NAME = os.environ.get("MODA_MODEL_NAME", "gpt-4o-mini")
+OPENAI_API_KEY = os.environ.get("MODA_OPENAI_API_KEY")
+OPENAI_BASE_URL = os.environ.get("MODA_OPENAI_BASE_URL")
 
-embeddings = OpenAIEmbeddings(model=EMBED_MODEL)
-llm = ChatOpenAI(model=MODEL, temperature=0, openai_api_key=OPENAI_API_KEY)
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
 
-# prepare retriever for queries
-def get_retriever(k:int = 6, use_mmr:bool=True):
-    store = get_chroma_client_and_store(collection_name=COLLECTION, embeddings=embeddings)
-    retriever = store.as_retriever(search_type="mmr" if use_mmr else "similarity",
-                                   search_kwargs={"k": k})
-    return retriever
+def qa_interaction(question: str) -> str:
+    print(f"🤔 RAG Searching for: {question}")
+    
+    embeddings = OpenAIEmbeddings(
+        model=EMBEDDING_MODEL,
+        openai_api_key=OPENAI_API_KEY,
+        openai_api_base=OPENAI_BASE_URL
+    )
+    
+    llm = ChatOpenAI(
+        model=MODEL_NAME,
+        temperature=0,
+        openai_api_key=OPENAI_API_KEY,
+        openai_api_base=OPENAI_BASE_URL
+    )
 
-def qa_interaction(query: str, k:int = 6):
-    retriever = get_retriever(k=k)
-    qa = RetrievalQA.from_chain_type(llm=llm, retriever=retriever, chain_type="map_reduce")
-    answer = qa.run(query)
-    return answer
+    try:
+        # 连接 Milvus (Docker)
+        vector_store = Milvus(
+            embedding_function=embeddings,
+            connection_args={"uri": MILVUS_URI},
+            collection_name=COLLECTION_NAME,
+        )
+        
+        # 检索 Top 3
+        retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+
+        template = """你是一个基于本地知识库的智能助手。请根据下面的【上下文】内容回答用户的问题。
+        如果上下文中没有相关信息，请诚实地说“知识库中未找到相关信息”。
+
+        【上下文】:
+        {context}
+
+        【问题】:
+        {question}
+
+        【回答】:"""
+        
+        custom_rag_prompt = PromptTemplate.from_template(template)
+
+        rag_chain = (
+            {"context": retriever | format_docs, "question": RunnablePassthrough()}
+            | custom_rag_prompt
+            | llm
+            | StrOutputParser()
+        )
+
+        result = rag_chain.invoke(question)
+        return result
+
+    except Exception as e:
+        return f"RAG 系统出错: {str(e)}"
