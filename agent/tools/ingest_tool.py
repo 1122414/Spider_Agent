@@ -16,7 +16,7 @@ load_dotenv()
 # 配置
 MILVUS_URI = os.environ.get("MILVUS_URI", "http://localhost:19530")
 COLLECTION_NAME = "spider_knowledge_base"
-EMBEDDING_MODEL = os.environ.get("MODA_EMBEDDING_MODEL", "text-embedding-3-small")
+EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
 OPENAI_API_KEY = os.environ.get("MODA_OPENAI_API_KEY")
 OPENAI_BASE_URL = os.environ.get("MODA_OPENAI_BASE_URL")
 
@@ -62,7 +62,7 @@ def _flatten_data_to_documents(data: Union[List, Dict]) -> List[Document]:
         
         parent_text = "\n".join(content_parts)
         
-        # 【关键修复】严格过滤空文本，防止 Embedding 报错
+        # 严格过滤空文本
         if parent_text and len(parent_text.strip()) > 5:
             doc = Document(
                 page_content=parent_text,
@@ -82,7 +82,6 @@ def _flatten_data_to_documents(data: Union[List, Dict]) -> List[Document]:
                 
                 if child_parts:
                     child_text = f"《{title}》的详细信息:\n" + "\n".join(child_parts)
-                    # 【关键修复】再次过滤
                     if child_text and len(child_text.strip()) > 5:
                         child_doc = Document(
                             page_content=child_text,
@@ -101,22 +100,21 @@ def save_to_milvus(data: Union[Dict, List] = None) -> str:
 
     docs = _flatten_data_to_documents(actual_data)
     
-    # 【关键修复】最后一道防线，确保没有空 Document
+    # 最后一道防线：确保没有空 Document
     valid_docs = [d for d in docs if d.page_content and d.page_content.strip()]
     
     if not valid_docs:
         return "保存失败: 数据转换后为空，无法入库"
     
-    print(f"🔄 正在将 {len(valid_docs)} 条数据片段存入 Milvus ({MILVUS_URI})...")
+    print(f"🔄 准备将 {len(valid_docs)} 条数据片段存入 Milvus ({MILVUS_URI})...")
 
     try:
         # 初始化 Embedding
-        # chunk_size=1000 有助于避免批处理过大导致的索引错误
+        # 移除 chunk_size 参数，使用默认设置，避免触发 IndexError
         embeddings = OpenAIEmbeddings(
             model=EMBEDDING_MODEL,
             openai_api_key=OPENAI_API_KEY,
-            openai_api_base=OPENAI_BASE_URL,
-            chunk_size=1000 
+            openai_api_base=OPENAI_BASE_URL
         )
 
         # 连接 Milvus
@@ -128,10 +126,20 @@ def save_to_milvus(data: Union[Dict, List] = None) -> str:
             drop_old=False
         )
         
-        # 添加文档
-        vector_store.add_documents(valid_docs)
+        # 【核心修复】手动分批写入
+        # 规避 langchain-openai 在处理大列表时的 IndexError bug
+        # 每次只写 50 条，稳健性极高
+        BATCH_SIZE = 50
+        total_batches = (len(valid_docs) + BATCH_SIZE - 1) // BATCH_SIZE
         
-        print(f"💾 成功将 {len(valid_docs)} 个知识片段存入 Milvus 向量库。")
+        print(f"📦 开始分批写入 (Batch Size: {BATCH_SIZE}, Total Batches: {total_batches})...")
+        
+        for i in range(0, len(valid_docs), BATCH_SIZE):
+            batch = valid_docs[i : i + BATCH_SIZE]
+            vector_store.add_documents(batch)
+            print(f"   -> Batch {i // BATCH_SIZE + 1}/{total_batches} 完成 ({len(batch)} docs)")
+        
+        print(f"💾 全部完成！成功将 {len(valid_docs)} 个知识片段存入 Milvus。")
         return f"成功将 {len(valid_docs)} 条数据存入知识库 (Milvus Collection: {COLLECTION_NAME})"
         
     except Exception as e:
