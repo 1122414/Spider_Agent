@@ -5,45 +5,38 @@ import random
 from typing import List, Dict, Any, Union
 from dotenv import load_dotenv
 
-# LangChain Components
+# LangChain & Milvus
 from langchain_core.documents import Document
 from langchain_openai import OpenAIEmbeddings
-from langchain_community.embeddings import OllamaEmbeddings # 新增 Ollama 支持
+from langchain_community.embeddings import OllamaEmbeddings
 from langchain_milvus import Milvus
 
 # 引入 registry 以获取缓存数据
 from agent.tools.registry import tool_registry
 
+from config import *
+
 load_dotenv()
 
 # ========================== 配置区域 ==========================
-MILVUS_URI = os.environ.get("MILVUS_URI", "http://localhost:19530")
-COLLECTION_NAME = "spider_knowledge_base"
+# MILVUS_URI = os.environ.get("MILVUS_URI", "http://localhost:19530")
+# COLLECTION_NAME = "spider_knowledge_base"
 
-# Embedding 配置
-EMBEDDING_MODEL = os.environ.get("MODA_EMBEDDING_MODEL", "text-embedding-3-small")
-OPENAI_API_KEY = os.environ.get("MODA_OPENAI_API_KEY")
-OPENAI_BASE_URL = os.environ.get("MODA_OPENAI_BASE_URL")
-
-# 本地 Ollama
-OPENAI_OLLAMA_EMBEDDING_MODEL = os.environ.get("OPENAI_OLLAMA_EMBEDDING_MODEL", "text-embedding-3-small")
-OPENAI_OLLAMA_BASE_URL = os.environ.get("OPENAI_OLLAMA_BASE_URL", OPENAI_BASE_URL)
+# # Embedding 配置
+# EMBEDDING_MODEL = os.environ.get("MODA_EMBEDDING_MODEL", "text-embedding-3-small")
+# OPENAI_API_KEY = os.environ.get("MODA_OPENAI_API_KEY")
+# OPENAI_BASE_URL = os.environ.get("MODA_OPENAI_BASE_URL")
+# OPENAI_OLLAMA_BASE_URL = os.environ.get("MODA_OLLAMA_BASE_URL", OPENAI_BASE_URL)
 
 def get_embedding_model():
     """
     工厂函数：自动选择 OpenAI 或 Ollama 嵌入模型
     """
-    # 简单的自动判定逻辑：如果 Base URL 包含 11434 (Ollama 默认端口)，则使用 OllamaEmbeddings
     if OPENAI_OLLAMA_BASE_URL and "11434" in OPENAI_OLLAMA_BASE_URL:
-        print(f"🔌 检测到本地 Ollama 环境，切换至 OllamaEmbeddings (Model: {EMBEDDING_MODEL})...")
-        # OllamaEmbeddings 不需要 /v1 后缀
-        base_url = OPENAI_OLLAMA_BASE_URL.replace("/v1", "").strip("/")
-        return OllamaEmbeddings(
-            base_url=base_url,
-            model=EMBEDDING_MODEL
-        )
+        print(f"🔌 [RAG] 切换至 Ollama Embeddings (Model: {EMBEDDING_MODEL})...")
+        base_url = OPENAI_OLLAMA_BASE_URL.replace("/api/generate", "").replace("/v1", "").rstrip("/")
+        return OllamaEmbeddings(base_url=base_url, model=OPENAI_OLLAMA_EMBEDDING_MODEL)
     else:
-        # 默认使用 OpenAI 兼容模式
         return OpenAIEmbeddings(
             model=EMBEDDING_MODEL,
             openai_api_key=OPENAI_API_KEY,
@@ -63,77 +56,154 @@ def _resolve_data(data: Union[Dict, List, None]) -> Union[Dict, List, None]:
             return cached_data
     return data if data else None
 
-def _flatten_data_to_documents(data: Union[List, Dict]) -> List[Document]:
-    items = []
+def _extract_items_from_structure(data: Any) -> List[Dict]:
+    """
+    【核心逻辑】递归查找嵌套字典中包含数据的列表
+    解决类似 target_content -> items 这种深层嵌套问题
+    """
+    if isinstance(data, list):
+        return data
+    
     if isinstance(data, dict):
-        items = data.get("data") or data.get("items") or data.get("target_content") or []
-        if not items and "url" in data: items = [data]
-    elif isinstance(data, list):
-        items = data
+        # 1. 优先查找常见的数据容器 Key
+        priority_keys = ["items", "data", "list", "target_content", "results", "products"]
         
-    if not items: return []
+        for key in priority_keys:
+            if key in data:
+                val = data[key]
+                # 如果找到列表，直接返回
+                if isinstance(val, list) and len(val) > 0:
+                    return val
+                # 如果是字典（如 target_content），递归进去找
+                if isinstance(val, dict):
+                    deep_items = _extract_items_from_structure(val)
+                    if deep_items: 
+                        return deep_items
+        
+        # 2. 如果常见 Key 没找到，就把 Dict 本身当做单条数据
+        # 但要排除那种只包含 meta 信息（如 code: 200）的 dict
+        if len(data.keys()) > 1: # 至少有点内容的
+            return [data]
+            
+    return []
+
+def _flatten_data_to_documents(data: Union[List, Dict]) -> List[Document]:
+    """
+    通用版数据扁平化：自适应各种字段名
+    """
+    # 1. 智能提取列表数据
+    items = _extract_items_from_structure(data)
+        
+    if not items:
+        print("⚠️ [Flatten] 未找到有效列表数据。")
+        return []
 
     documents = []
+    
     for item in items:
         if not isinstance(item, dict): continue
         
-        title = item.get("电影名称") or item.get("title") or item.get("name") or "未知标题"
-        url = item.get("链接") or item.get("url") or item.get("link") or ""
+        # --- A. 动态识别 Title 和 URL ---
+        title = "未命名条目"
+        url = ""
         
-        content_parts = []
+        # 启发式关键词
+        title_keywords = ["title", "name", "名称", "名", "标题", "product", "movie"]
+        url_keywords = ["url", "link", "href", "链接", "跳转"]
+
+        # 遍历所有字段来猜测 Title 和 URL
         for k, v in item.items():
-            if k not in ["children", "url", "link", "href", "跳转链接"] and v and isinstance(v, str) and v.strip():
-                content_parts.append(f"{k}: {v.strip()}")
+            if not isinstance(v, str): continue
+            k_lower = k.lower()
+            
+            # 猜 URL
+            if not url and any(kw in k_lower for kw in url_keywords) and (v.startswith("http") or v.startswith("/")):
+                url = v
+            
+            # 猜 Title (优先级：如果 key 包含 keyword，且 value 不像 url)
+            if title == "未命名条目" and any(kw in k_lower for kw in title_keywords) and len(v) < 100:
+                title = v
+
+        # 如果没猜到 Title，尝试用第一个非 URL 的短字符串作为 Title
+        if title == "未命名条目":
+            for k, v in item.items():
+                if isinstance(v, str) and len(v) > 2 and len(v) < 50 and not v.startswith("http"):
+                    title = v
+                    break
+
+        # --- B. 构建全字段文本 (Flatten All Fields) ---
+        content_parts = []
+        
+        # 第一层字段
+        for k, v in item.items():
+            # 跳过特殊字段和空值
+            if k in ["children", "target_content", "items"] or v is None: 
+                continue
+            
+            # 转换为字符串
+            val_str = str(v).strip()
+            if not val_str: continue
+            
+            # 格式化: "商品名: 洋奢发热保暖..."
+            content_parts.append(f"{k}: {val_str}")
         
         parent_text = "\n".join(content_parts)
         
-        if parent_text and len(parent_text.strip()) > 5:
+        if parent_text and len(parent_text) > 5:
             doc = Document(
                 page_content=parent_text,
                 metadata={"source": url, "title": title, "type": "parent_info"}
             )
             documents.append(doc)
             
+        # --- C. 递归处理 Children (如有) ---
         children = item.get("children", [])
+        # 有些网站可能把子列表叫 sub_items 等，这里可以扩展
+        
         if isinstance(children, list):
             for child in children:
                 if not isinstance(child, dict): continue
+                
                 child_parts = []
                 for k, v in child.items():
-                    if v and isinstance(v, str) and v.strip():
-                        child_parts.append(f"{k}: {v.strip()}")
+                    val_str = str(v).strip()
+                    if val_str:
+                        child_parts.append(f"{k}: {val_str}")
                 
                 if child_parts:
+                    # 将父级 title 拼接到子级内容中，保持上下文
                     child_text = f"《{title}》的详细信息:\n" + "\n".join(child_parts)
-                    if child_text and len(child_text.strip()) > 5:
-                        child_doc = Document(
-                            page_content=child_text,
-                            metadata={"source": url, "title": title, "type": "child_detail"}
-                        )
-                        documents.append(child_doc)
+                    child_doc = Document(
+                        page_content=child_text,
+                        metadata={"source": url, "title": title, "type": "child_detail"}
+                    )
+                    documents.append(child_doc)
+                    
     return documents
 
 def save_to_milvus(data: Union[Dict, List] = None) -> str:
     """
-    将数据存入 Milvus 向量知识库 (支持 OpenAI/Ollama)
+    将数据存入 Milvus 向量知识库 (稳健版)
     """
     actual_data = _resolve_data(data)
     if not actual_data:
         return "保存失败: 没有有效数据"
 
+    # 转换数据
     docs = _flatten_data_to_documents(actual_data)
+    
+    # 过滤空文档
     valid_docs = [d for d in docs if d.page_content and d.page_content.strip()]
     
     if not valid_docs:
-        return "保存失败: 数据转换后为空"
+        return f"保存失败: 数据转换后为空 (原始数据类型: {type(actual_data)})"
     
     print(f"🔄 准备处理 {len(valid_docs)} 条数据片段...")
 
     try:
-        # 1. 初始化 Embedding 模型 (自动判断类型)
         embeddings = get_embedding_model()
 
-        # 2. 手动计算向量 (带重试机制)
+        # 手动计算向量 (防止 429)
         text_embeddings = []
         metadatas = []
         texts = []
@@ -146,8 +216,6 @@ def save_to_milvus(data: Union[Dict, List] = None) -> str:
             while retry_count < max_retries:
                 try:
                     clean_text = doc.page_content.replace("\n", " ")
-                    
-                    # embed_query 是所有 LangChain Embedding 类都支持的标准接口
                     vector = embeddings.embed_query(clean_text)
                     
                     texts.append(doc.page_content)
@@ -157,13 +225,11 @@ def save_to_milvus(data: Union[Dict, List] = None) -> str:
                     if (i + 1) % 5 == 0:
                         print(f"   -> 已向量化 {i + 1}/{len(valid_docs)} 条")
                     
-                    # 本地模型不需要 sleep，但为了保险起见保留微小延迟
-                    time.sleep(1)
+                    time.sleep(0.05)
                     break
                     
                 except Exception as e:
                     error_str = str(e)
-                    # 只有 API 调用才会有 429，本地模型通常是其他错误
                     if "429" in error_str:
                         wait_time = 2 ** retry_count
                         print(f"   ⚠️ 限流等待 {wait_time}s...")
@@ -174,27 +240,24 @@ def save_to_milvus(data: Union[Dict, List] = None) -> str:
                         break
             
         if not text_embeddings:
-            return "保存失败: 所有数据向量化均失败，请检查模型配置。"
+            return "保存失败: 所有数据向量化均失败。"
 
         print(f"✅ 向量计算完成 ({len(text_embeddings)} 条)，准备存入 Milvus...")
 
-        # 3. 存入 Milvus
         vector_store = Milvus(
             embedding_function=embeddings,
             connection_args={"uri": MILVUS_URI},
             collection_name=COLLECTION_NAME,
             auto_id=True,
-            drop_old=True  # 强制重建表以适应新模型的维度
+            drop_old=True 
         )
         
-        # 存入数据
         vector_store.add_embeddings(
             texts=texts,
             embeddings=text_embeddings,
             metadatas=metadatas
         )
         
-        # 强制刷新
         try:
             if hasattr(vector_store, 'col') and vector_store.col:
                 vector_store.col.flush()

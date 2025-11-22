@@ -11,7 +11,7 @@ MILVUS_URI = os.getenv("MILVUS_URI", "http://localhost:19530")
 COLLECTION_NAME = "spider_knowledge_base"
 
 # ==========================
-# 模型参数配置
+# 魔搭模型参数配置（不加Ollama的全是魔搭、线上API）
 # ==========================
 EMBEDDING_MODEL = os.getenv("MODA_EMBEDDING_MODEL", "text-embedding-3-small")
 MODEL_NAME = os.getenv("MODA_MODEL_NAME", "gpt-4o-mini")
@@ -19,15 +19,16 @@ OPENAI_API_KEY = os.getenv("MODA_OPENAI_API_KEY")
 OPENAI_BASE_URL = os.getenv("MODA_OPENAI_BASE_URL")
 
 # ==========================
-# 特殊逻辑处理 (比如 URL 清洗)
-# 这里写一次，所有文件都受益
+# 本地Ollama
 # ==========================
-raw_ollama_url = os.getenv("MODA_OLLAMA_BASE_URL", OPENAI_BASE_URL)
-OPENAI_OLLAMA_BASE_URL = None
+OPENAI_OLLAMA_EMBEDDING_MODEL = os.getenv("OPENAI_OLLAMA_EMBEDDING_MODEL", OPENAI_BASE_URL)
+OPENAI_OLLAMA_BASE_URL = os.getenv("OPENAI_OLLAMA_BASE_URL")
 
-if raw_ollama_url:
+EMBEDDING_TYPE = os.getenv("EMBEDDING_TYPE", "api").lower()
+
+if OPENAI_BASE_URL:
     # 统一清洗逻辑：去除 /api/generate, /v1, 尾部斜杠
-    OPENAI_OLLAMA_BASE_URL = raw_ollama_url.replace("/api/generate", "").replace("/v1", "").rstrip("/")
+    base_url = OPENAI_OLLAMA_BASE_URL.replace("/v1", "").strip("/")
 
 # Rerank 配置
 RERANK_TYPE = os.getenv("RERANK_TYPE", "api").lower()

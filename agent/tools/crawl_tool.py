@@ -1,7 +1,9 @@
+import re
+import random
 import asyncio
 import nest_asyncio
 from typing import List, Dict, Any, Set, Union
-import re
+
 from urllib.parse import urljoin
 
 # 引入原生 Playwright
@@ -35,7 +37,7 @@ async def _auto_scroll(page, max_scrolls: int):
     for i in range(max_scrolls):
         try:
             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            await page.wait_for_timeout(1500) 
+            await page.wait_for_timeout(random.randint(10,15)*1000) 
             # print(f"   Scrolled {i+1}/{max_scrolls}")
         except Exception as e:
             print(f"   Scroll failed: {e}")
@@ -120,7 +122,8 @@ async def _recursive_crawl_logic(
     current_depth: int,
     max_items: int,
     visited_urls: Set[str],
-    max_pages: int = 3  # 新增：最大翻页数
+    max_pages: int = 3,  # 新增：最大翻页数
+    max_scrolls: int = 1
 ) -> Union[List[Dict], Dict, str]:
     """
     [内部递归函数] 处理多层级爬取逻辑，支持翻页
@@ -131,7 +134,7 @@ async def _recursive_crawl_logic(
 
     target = pipelines[current_depth]
     # 只有列表页(Depth 0)或明确需要翻页的层级才滚动
-    scrolls = 1 
+    
     
     # 自动给每一层加上链接提取提示
     enhanced_target = target + ["link", "url", "href", "链接", "跳转链接"]
@@ -155,7 +158,7 @@ async def _recursive_crawl_logic(
             print(f"   📄 [Depth {current_depth}] Flipping to Page {page_count + 1}: {current_page_url}")
 
         # 2. 爬取当前页
-        fetch_result = await playwright_fetch(current_page_url, enhanced_target, max_scrolls=scrolls)
+        fetch_result = await playwright_fetch(current_page_url, enhanced_target, max_scrolls=max_scrolls)
         
         if "error" in fetch_result and fetch_result["error"]:
             print(f"   ❌ Fetch error at {current_page_url}: {fetch_result['error']}")
@@ -278,7 +281,8 @@ async def hierarchical_crawl(
     url: str, 
     crawl_scopes: List[List[str]], 
     max_items: int = 3,
-    max_pages: int = 3
+    max_pages: int = 3,
+    max_scrolls: int = 1
 ) -> Dict:
     """
     [多层级深度爬虫 - 异步入口]
@@ -301,7 +305,8 @@ async def hierarchical_crawl(
         current_depth=0, 
         max_items=max_items, 
         visited_urls=visited_urls,
-        max_pages=max_pages
+        max_pages=max_pages,
+        max_scrolls=max_scrolls
     )
 
     return {
@@ -329,8 +334,8 @@ def sync_playwright_fetch(url: str, target: List[str], max_scrolls: int = 0) -> 
     """基础爬虫入口"""
     return _run_async(playwright_fetch(url, target, max_scrolls=max_scrolls))
 
-def sync_hierarchical_crawl(url: str, crawl_scopes: List[List[str]], max_items: int = 3, max_pages: int = 3) -> Dict:
+def sync_hierarchical_crawl(url: str, crawl_scopes: List[List[str]], max_items: int = 3, max_pages: int = 3, max_scrolls: int = 1) -> Dict:
     """
     [新版] 多层级爬虫入口，支持翻页参数
     """
-    return _run_async(hierarchical_crawl(url, crawl_scopes, max_items, max_pages))
+    return _run_async(hierarchical_crawl(url, crawl_scopes, max_items, max_pages, max_scrolls))

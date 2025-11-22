@@ -16,12 +16,15 @@ from agent.tools.save_tool import save_to_csv, save_to_json, save_to_postgres
 # RAG 入库工具
 from agent.tools.ingest_tool import save_to_milvus
 
+# 导入配置
+from config import *
+
 # 加载环境变量
 load_dotenv()
 
-MODA_OPENAI_API_KEY = os.environ.get("MODA_OPENAI_API_KEY")
-MODA_OPENAI_BASE_URL = os.environ.get("MODA_OPENAI_BASE_URL")
-MODEL = os.environ.get("MODA_MODEL_NAME", "gpt-4o-mini")
+# MODA_OPENAI_API_KEY = os.environ.get("MODA_OPENAI_API_KEY")
+# MODA_OPENAI_BASE_URL = os.environ.get("MODA_OPENAI_BASE_URL")
+# MODEL_NAME = os.environ.get("MODA_MODEL_NAME", "gpt-4o-mini")
 
 def setup_system():
     """系统初始化与装配"""
@@ -29,10 +32,10 @@ def setup_system():
     
     # A. 初始化 LLM
     chat = ChatOpenAI(
-        model=MODEL, 
+        model=MODEL_NAME, 
         temperature=0, 
-        openai_api_key=MODA_OPENAI_API_KEY, 
-        openai_api_base=MODA_OPENAI_BASE_URL
+        openai_api_key=OPENAI_API_KEY, 
+        openai_api_base=OPENAI_BASE_URL
     )
     
     # B. 注册工具箱
@@ -40,7 +43,7 @@ def setup_system():
     # --- 1. 爬虫类工具 ---
     tool_registry.register_tool(
         tool_name="web_crawler",
-        description="基础爬虫：提取单页面信息。参数: url, target (字段列表)。",
+        description="基础爬虫：提取单页面信息。参数: url, target (字段列表), max_scrolls (最大滚动次数)。",
         func=sync_playwright_fetch
     )
     
@@ -54,6 +57,7 @@ def setup_system():
           例如抓取3层: [ ["动漫名", "链接"], ["播放线路链接"], ["评论内容", "点赞"] ]
         - max_items: (可选) 每一页递归抓取的最大条目数，默认100（即抓取整页）。
         - max_pages: (可选) 每一层列表页的最大翻页数，默认10。
+        - max_scrolls: (可选) 最大滚动数，默认是1
         """,
         func=sync_hierarchical_crawl
     )

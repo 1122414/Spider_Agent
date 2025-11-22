@@ -14,7 +14,7 @@ load_dotenv()
 
 MODA_OPENAI_API_KEY = os.environ.get("MODA_OPENAI_API_KEY")
 MODA_OPENAI_BASE_URL = os.environ.get("MODA_OPENAI_BASE_URL")
-MODEL = os.environ.get("MODA_MODEL_NAME", "gpt-4o-mini")
+MODEL_NAME = os.environ.get("MODA_MODEL_NAME", "gpt-4o-mini")
 
 # structured parser schema
 schemas = [
@@ -38,7 +38,7 @@ prompt_template = """
 
 # 初始化 LLM
 chat = ChatOpenAI(
-    model=MODEL, 
+    model=MODEL_NAME, 
     temperature=0, 
     openai_api_key=MODA_OPENAI_API_KEY, 
     openai_api_base=MODA_OPENAI_BASE_URL
