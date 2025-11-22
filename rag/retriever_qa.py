@@ -7,6 +7,7 @@ from langchain_milvus import Milvus
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
+from config import *
 
 # 尝试导入自定义 prompt_template
 try:
@@ -19,18 +20,18 @@ load_dotenv()
 # ==============================================================================
 # 1. 配置区域
 # ==============================================================================
-MILVUS_URI = os.environ.get("MILVUS_URI", "http://localhost:19530")
-COLLECTION_NAME = "spider_knowledge_base"
+# MILVUS_URI = os.environ.get("MILVUS_URI", "http://localhost:19530")
+# COLLECTION_NAME = "spider_knowledge_base"
 
-# Embedding 配置
-EMBEDDING_MODEL = os.environ.get("MODA_EMBEDDING_MODEL", "text-embedding-3-small")
-MODEL_NAME = os.environ.get("MODA_MODEL_NAME", "gpt-4o-mini")
-OPENAI_API_KEY = os.environ.get("MODA_OPENAI_API_KEY")
-OPENAI_BASE_URL = os.environ.get("MODA_OPENAI_BASE_URL")
+# # Embedding 配置
+# EMBEDDING_MODEL = os.environ.get("MODA_EMBEDDING_MODEL", "text-embedding-3-small")
+# MODEL_NAME = os.environ.get("MODA_MODEL_NAME", "gpt-4o-mini")
+# OPENAI_API_KEY = os.environ.get("MODA_OPENAI_API_KEY")
+# OPENAI_BASE_URL = os.environ.get("MODA_OPENAI_BASE_URL")
 
-# 本地 Ollama
-OPENAI_OLLAMA_EMBEDDING_MODEL = os.environ.get("OPENAI_OLLAMA_EMBEDDING_MODEL", "text-embedding-3-small")
-OPENAI_OLLAMA_BASE_URL = os.environ.get("OPENAI_OLLAMA_BASE_URL", OPENAI_BASE_URL)
+# # 本地 Ollama
+# OPENAI_OLLAMA_EMBEDDING_MODEL = os.environ.get("OPENAI_OLLAMA_EMBEDDING_MODEL", "text-embedding-3-small")
+# OPENAI_OLLAMA_BASE_URL = os.environ.get("OPENAI_OLLAMA_BASE_URL", OPENAI_BASE_URL)
 
 # ==============================================================================
 # 2. 辅助函数
@@ -44,20 +45,12 @@ def get_embedding_model():
     # 优先检查是否存在 Ollama 的特征端口 11434
     target_url = OPENAI_OLLAMA_BASE_URL
     
-    if target_url and "11434" in target_url:
-        print(f"🔌 [RAG] 切换至 Ollama Embeddings (Model: {EMBEDDING_MODEL})...")
-        
-        # 【关键修复】清洗 URL，去除用户可能多写的路径
-        # 1. 去除 /api/generate (生成接口)
-        # 2. 去除 /v1 (OpenAI 兼容接口)
-        # 3. 去除尾部斜杠
-        clean_base_url = target_url.replace("/api/generate", "").replace("/v1", "").rstrip("/")
-        
-        # 打印调试信息，确保 URL 正确
-        print(f"   -> Ollama Base URL: {clean_base_url}")
-        
+    if EMBEDDING_TYPE == 'local':
+        print(f"🔌 使用 OllamaEmbeddings (Model: {OPENAI_OLLAMA_EMBEDDING_MODEL})...")
+        # OllamaEmbeddings 不需要 /v1 后缀
+        base_url = OPENAI_OLLAMA_BASE_URL.replace("/api/generate", "").replace("/v1", "").rstrip("/")
         return OllamaEmbeddings(
-            base_url=clean_base_url, 
+            base_url=base_url,
             model=OPENAI_OLLAMA_EMBEDDING_MODEL
         )
     else:

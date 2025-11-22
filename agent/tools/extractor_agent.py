@@ -8,20 +8,21 @@ from langchain_openai import ChatOpenAI
 # 修复导入路径，避免 ImportError
 from langchain_core.prompts import PromptTemplate
 from agent.prompt_template import SCRAWL_DATA_SYSTEM_PROMPT
+from config import *
 
 load_dotenv()
 
-MODA_OPENAI_API_KEY = os.environ.get("MODA_OPENAI_API_KEY")
-MODA_OPENAI_BASE_URL = os.environ.get("MODA_OPENAI_BASE_URL")
-MODEL = os.environ.get("MODA_MODEL_NAME", "gpt-4o-mini")
+# MODA_OPENAI_API_KEY = os.environ.get("MODA_OPENAI_API_KEY")
+# MODA_OPENAI_BASE_URL = os.environ.get("MODA_OPENAI_BASE_URL")
+# MODEL_NAME = os.environ.get("MODA_MODEL_NAME", "gpt-4o-mini")
 
 class ExtractorAgent:
     def __init__(self):
         self.llm = ChatOpenAI(
-            model=MODEL, 
+            model=MODEL_NAME, 
             temperature=0.1, # 降低温度以提高格式稳定性
-            openai_api_key=MODA_OPENAI_API_KEY, 
-            openai_api_base=MODA_OPENAI_BASE_URL
+            openai_api_key=OPENAI_API_KEY, 
+            openai_api_base=OPENAI_BASE_URL
         )
 
     def get_content(self, fetched_html: str, target: List[str], source: str) -> Dict[str, Any]:
@@ -37,7 +38,7 @@ class ExtractorAgent:
         # ============================================================
         # 分块策略 (Map-Reduce)
         # ============================================================
-        CHUNK_SIZE = 30000  # 30k 字符安全阈值
+        CHUNK_SIZE = 20000  # 20k 字符安全阈值
         
         # Fast Path: 不分块
         if len(fetched_html) <= CHUNK_SIZE:
@@ -59,7 +60,7 @@ class ExtractorAgent:
             items = chunk_result.get("items", [])
             if items:
                 all_items.extend(items)
-                print(f"      ✅ 第 {i+1} 块提取到 {len(items)} 条数据")
+                print(f"✅ 第 {i+1} 块提取到 {len(items)} 条数据")
             
             # 2. 收集 next_page_url 
             # 翻页链接通常在页面的底部（即最后几个块中）
@@ -116,22 +117,39 @@ class ExtractorAgent:
         return final_structure
 
     def _split_text_by_lines(self, text: str, max_length: int) -> List[str]:
-        """按行切分文本，防止切断 JSON 结构或 Markdown 行"""
+        """按行切分文本，并安全处理超长行"""
         lines = text.split('\n')
         chunks = []
         current_chunk = []
         current_length = 0
         
         for line in lines:
-            line_len = len(line) + 1
+            line_len = len(line) + 1 # +1 是考虑换行符
+            
+            # --- 修复开始：处理单行超长的情况 ---
             if line_len > max_length:
+                # 1. 先把手头积攒的 current_chunk 存掉
                 if current_chunk:
                     chunks.append("\n".join(current_chunk))
                     current_chunk = []
                     current_length = 0
-                chunks.append(line[:max_length])
-                continue
+                
+                # 2. 循环切分当前这行超长的文本
+                # 比如 line 有 70k，max_length 是 30k，这里会切成 30k, 30k, 10k
+                while len(line) > max_length:
+                    # 切下前 max_length 个字符作为一个单独的 chunk
+                    chunks.append(line[:max_length])
+                    # 把剩下的部分赋值回 line，继续处理
+                    line = line[max_length:]
+                
+                # 3. 剩下的部分（也就是 < max_length 的部分）不能丢
+                # 把它作为新 chunk 的开头，放入 current_chunk
+                current_chunk = [line]
+                current_length = len(line) + 1
+                continue 
+            # --- 修复结束 ---
 
+            # 下面是正常行的处理逻辑（保持不变）
             if current_length + line_len > max_length:
                 chunks.append("\n".join(current_chunk))
                 current_chunk = [line]
@@ -140,8 +158,10 @@ class ExtractorAgent:
                 current_chunk.append(line)
                 current_length += line_len
         
+        # 处理最后剩下的 residue
         if current_chunk:
             chunks.append("\n".join(current_chunk))
+            
         return chunks
 
     def _parse_json_safely(self, text: str) -> Union[List, Dict]:
