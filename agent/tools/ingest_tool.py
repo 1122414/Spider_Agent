@@ -1,4 +1,5 @@
 import os
+import time
 import json
 from typing import List, Dict, Any, Union
 from dotenv import load_dotenv
@@ -49,20 +50,17 @@ def _flatten_data_to_documents(data: Union[List, Dict]) -> List[Document]:
     for item in items:
         if not isinstance(item, dict): continue
         
-        # 1. 提取元数据
         title = item.get("电影名称") or item.get("title") or item.get("name") or "未知标题"
         url = item.get("链接") or item.get("url") or item.get("link") or ""
         
-        # 2. 构建父级文本
+        # 构建父级文本
         content_parts = []
         for k, v in item.items():
-            # 过滤掉空值和非文本值
             if k not in ["children", "url", "link", "href", "跳转链接"] and v and isinstance(v, str) and v.strip():
                 content_parts.append(f"{k}: {v.strip()}")
         
         parent_text = "\n".join(content_parts)
         
-        # 严格过滤空文本
         if parent_text and len(parent_text.strip()) > 5:
             doc = Document(
                 page_content=parent_text,
@@ -70,7 +68,7 @@ def _flatten_data_to_documents(data: Union[List, Dict]) -> List[Document]:
             )
             documents.append(doc)
             
-        # 3. 处理 Children
+        # 处理 Children
         children = item.get("children", [])
         if isinstance(children, list):
             for child in children:
@@ -92,55 +90,81 @@ def _flatten_data_to_documents(data: Union[List, Dict]) -> List[Document]:
 
 def save_to_milvus(data: Union[Dict, List] = None) -> str:
     """
-    将数据存入 Milvus 向量知识库 (Docker版)
+    将数据存入 Milvus 向量知识库 (稳健版)
     """
     actual_data = _resolve_data(data)
     if not actual_data:
         return "保存失败: 没有有效数据"
 
     docs = _flatten_data_to_documents(actual_data)
-    
-    # 最后一道防线：确保没有空 Document
     valid_docs = [d for d in docs if d.page_content and d.page_content.strip()]
     
     if not valid_docs:
-        return "保存失败: 数据转换后为空，无法入库"
+        return "保存失败: 数据转换后为空"
     
-    print(f"🔄 准备将 {len(valid_docs)} 条数据片段存入 Milvus ({MILVUS_URI})...")
+    print(f"🔄 准备处理 {len(valid_docs)} 条数据片段...")
 
     try:
-        # 初始化 Embedding
-        # 移除 chunk_size 参数，使用默认设置，避免触发 IndexError
+        # 1. 初始化 Embedding 模型
         embeddings = OpenAIEmbeddings(
             model=EMBEDDING_MODEL,
             openai_api_key=OPENAI_API_KEY,
             openai_api_base=OPENAI_BASE_URL
         )
 
-        # 连接 Milvus
+        # 2. 【手动计算向量】
+        # 绕过 LangChain 的批量处理 Bug，并增加速率限制防止 429
+        text_embeddings = []
+        metadatas = []
+        texts = []
+        
+        print(f"⚡ 开始计算向量 (Manual Embedding Mode)...")
+        for i, doc in enumerate(valid_docs):
+            try:
+                # 每次只算一条，最稳健
+                # replace newlines 是官方推荐做法
+                clean_text = doc.page_content.replace("\n", " ")
+                vector = embeddings.embed_query(clean_text)
+                
+                texts.append(doc.page_content)
+                metadatas.append(doc.metadata)
+                text_embeddings.append(vector)
+                
+                # 简单的进度条
+                if (i + 1) % 5 == 0:
+                    print(f"   -> 已向量化 {i + 1}/{len(valid_docs)} 条")
+                
+                # 【关键】防 429 限流：每条间隔 0.2 秒
+                time.sleep(0.2)
+                
+            except Exception as e:
+                print(f"   ⚠️ 第 {i} 条嵌入失败: {e}")
+                continue
+
+        if not text_embeddings:
+            return "保存失败: 所有数据向量化均失败，请检查 API Key 或网络。"
+
+        print(f"✅ 向量计算完成，准备存入 Milvus ({len(text_embeddings)} 条)...")
+
+        # 3. 存入 Milvus
+        # drop_old=True: 强制删除旧表，解决维度冲突 (4096 vs 1536)
         vector_store = Milvus(
             embedding_function=embeddings,
             connection_args={"uri": MILVUS_URI},
             collection_name=COLLECTION_NAME,
             auto_id=True,
-            drop_old=False
+            drop_old=True  # 【关键】强制重建表
         )
         
-        # 【核心修复】手动分批写入
-        # 规避 langchain-openai 在处理大列表时的 IndexError bug
-        # 每次只写 50 条，稳健性极高
-        BATCH_SIZE = 50
-        total_batches = (len(valid_docs) + BATCH_SIZE - 1) // BATCH_SIZE
+        # 使用 add_embeddings 直接存入算好的向量，不再让 LangChain 重新算
+        vector_store.add_embeddings(
+            texts=texts,
+            embeddings=text_embeddings,
+            metadatas=metadatas
+        )
         
-        print(f"📦 开始分批写入 (Batch Size: {BATCH_SIZE}, Total Batches: {total_batches})...")
-        
-        for i in range(0, len(valid_docs), BATCH_SIZE):
-            batch = valid_docs[i : i + BATCH_SIZE]
-            vector_store.add_documents(batch)
-            print(f"   -> Batch {i // BATCH_SIZE + 1}/{total_batches} 完成 ({len(batch)} docs)")
-        
-        print(f"💾 全部完成！成功将 {len(valid_docs)} 个知识片段存入 Milvus。")
-        return f"成功将 {len(valid_docs)} 条数据存入知识库 (Milvus Collection: {COLLECTION_NAME})"
+        print(f"💾 全部完成！成功存入 Milvus。")
+        return f"成功将 {len(text_embeddings)} 条数据存入知识库 (Collection: {COLLECTION_NAME}, Recreated)"
         
     except Exception as e:
         import traceback
