@@ -1,6 +1,7 @@
 import os
 import json
 import sys
+import traceback
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 
@@ -10,6 +11,7 @@ from agent.decision_engine import init_decision_engine
 
 # 2. 导入工具函数
 # 爬虫工具
+# 注意：请确保 agent/tools/crawl_tool.py 中已导出这两个同步包装函数
 from agent.tools.crawl_tool import sync_playwright_fetch, sync_hierarchical_crawl
 # 保存工具 (文件/数据库)
 from agent.tools.save_tool import save_to_csv, save_to_json, save_to_postgres
@@ -43,21 +45,33 @@ def setup_system():
     # --- 1. 爬虫类工具 ---
     tool_registry.register_tool(
         tool_name="web_crawler",
-        description="基础爬虫：提取单页面信息。参数: url, target (字段列表), max_scrolls (最大滚动次数)。",
+        description="""
+        [基础爬虫] 单页面提取工具 (持久化/抗反爬)。
+        适用于抓取单个页面的内容。会自动复用浏览器会话，保留Cookies和登录状态。
+        参数: 
+        - url: 目标网址 (String)
+        - target: 需要提取的字段列表 (List[str])
+        - max_scrolls: 最大滚动次数，用于触发懒加载 (int, 默认0)
+        """,
         func=sync_playwright_fetch
     )
     
     tool_registry.register_tool(
         tool_name="hierarchical_crawler",
         description="""
-        多层级深度爬虫：支持从列表页->详情页->更多详情页的递归抓取。
+        [深度爬虫] 多层级递归抓取工具 (支持翻页 & 自动登录态保持)。
+        支持从列表页->详情页->更多详情页的递归抓取。
+        全程复用浏览器上下文，适合需要登录或有复杂反爬的网站。
+        
         参数: 
-        - url: 起始网址。
-        - crawl_scopes: 一个二维数组，定义每一层的抓取目标。
-          例如抓取3层: [ ["动漫名", "链接"], ["播放线路链接"], ["评论内容", "点赞"] ]
-        - max_items: (可选) 每一页递归抓取的最大条目数，默认100（即抓取整页）。
-        - max_pages: (可选) 每一层列表页的最大翻页数，默认10。
-        - max_scrolls: (可选) 最大滚动数，默认是1
+        - url: 起始网址 (String)。
+        - crawl_scopes: 二维数组，定义每一层的抓取目标 (List[List[str]])。
+          例如抓取3层: [ ["动漫名", "链接"], ["播放线路链接"], ["评论内容"] ]
+        - max_items: (可选) 每一页递归抓取的最大条目数 (int, 默认3)。
+        - max_pages: (可选) 每一层列表页的最大翻页数 (int, 默认3)。
+        - max_scrolls: (可选) 滚动次数 (int, 默认1)。
+        - headless: (可选) 是否使用无头模式 (bool, 默认False)。
+          默认为 False (显示浏览器) 以最大程度绕过反爬检测。如果追求速度可设为 True。
         """,
         func=sync_hierarchical_crawl
     )
@@ -128,14 +142,15 @@ def interactive_agent_loop(decision_engine):
                 continue
 
             # --- 特殊指令：直接进入 RAG 问答模式 ---
-            # 如果用户开头输入 "qa" 或 "ask"，直接调用 RAG，不走 Agent 决策
             if user_input.lower().startswith("qa ") or user_input.lower().startswith("ask "):
                 query = user_input.split(" ", 1)[1]
                 try:
-                    # 延迟导入，确保环境准备好
+                    # 延迟导入，避免循环依赖或初始化问题
                     from rag.retriever_qa import qa_interaction
                     qa_result = qa_interaction(query)
                     print(f"\n🤖 [Knowledge Base]: {qa_result}")
+                except ImportError:
+                    print("⚠️ 模块缺失: 请检查 rag/retriever_qa.py 是否存在。")
                 except Exception as e:
                     print(f"⚠️ RAG Error: {e}")
                     print("提示: 请确保已安装 pymilvus, langchain-milvus 并正确配置了 Milvus 服务。")
@@ -159,6 +174,7 @@ def interactive_agent_loop(decision_engine):
             break
         except Exception as e:
             print(f"\n❌ 发生未捕获异常: {e}")
+            traceback.print_exc()
 
 if __name__ == "__main__":
     # 1. 装配系统
