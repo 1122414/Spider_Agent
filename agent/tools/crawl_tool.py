@@ -11,7 +11,7 @@ from playwright.async_api import async_playwright, BrowserContext, Page
 from langchain_core.documents import Document 
 from langchain_community.document_transformers import Html2TextTransformer
 
-# 假设这是你的自定义 Agent
+# 自定义 Agent
 from agent.tools.extractor_agent import ExtractorAgent
 
 # 应用 nest_asyncio 补丁 (防止 Jupyter/EventLoop 冲突)
