@@ -43,15 +43,24 @@ def get_embedding_model():
     增加了对 Ollama URL 的容错处理
     """
     # 优先检查是否存在 Ollama 的特征端口 11434
-    target_url = OPENAI_OLLAMA_BASE_URL
     
-    if EMBEDDING_TYPE == 'local':
+    # 本地Ollama框架
+    if EMBEDDING_TYPE == 'local_ollama':
         print(f"🔌 使用 OllamaEmbeddings (Model: {OPENAI_OLLAMA_EMBEDDING_MODEL})...")
         # OllamaEmbeddings 不需要 /v1 后缀
         base_url = OPENAI_OLLAMA_BASE_URL.replace("/api/generate", "").replace("/v1", "").rstrip("/")
         return OllamaEmbeddings(
             base_url=base_url,
             model=OPENAI_OLLAMA_EMBEDDING_MODEL
+        )
+    elif EMBEDDING_TYPE == 'local_vllm':
+        print(f"🔌 使用 Vllm OpenAIEmbeddings (Model: {VLLM_OPENAI_EMBEDDING_MODEL})...")
+        return OpenAIEmbeddings(
+            model=VLLM_OPENAI_EMBEDDING_MODEL,
+            openai_api_key=VLLM_OPENAI_EMBEDDING_API_KEY,
+            openai_api_base=VLLM_OPENAI_EMBEDDING_BASE_URL,
+            # 关闭本地 Token 检查，强制发送纯文本
+            check_embedding_ctx_length=False
         )
     else:
         return OpenAIEmbeddings(

@@ -30,5 +30,12 @@ if OPENAI_BASE_URL:
     # 统一清洗逻辑：去除 /api/generate, /v1, 尾部斜杠
     base_url = OPENAI_OLLAMA_BASE_URL.replace("/v1", "").strip("/")
 
+# ==========================
+# 服务器Vllm
+# ==========================
+VLLM_OPENAI_EMBEDDING_MODEL = os.getenv("VLLM_OPENAI_EMBEDDING_MODEL")
+VLLM_OPENAI_EMBEDDING_API_KEY = os.getenv("VLLM_OPENAI_EMBEDDING_API_KEY")
+VLLM_OPENAI_EMBEDDING_BASE_URL = os.getenv("VLLM_OPENAI_EMBEDDING_BASE_URL")
+
 # Rerank 配置
 RERANK_TYPE = os.getenv("RERANK_TYPE", "api").lower()
