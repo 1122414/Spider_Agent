@@ -32,15 +32,28 @@ def get_embedding_model():
     """
     工厂函数：自动选择 OpenAI 或 Ollama 嵌入模型
     """
-    if OPENAI_OLLAMA_BASE_URL and "11434" in OPENAI_OLLAMA_BASE_URL:
-        print(f"🔌 [RAG] 切换至 Ollama Embeddings (Model: {EMBEDDING_MODEL})...")
+    if EMBEDDING_TYPE == 'local_ollama':
+        print(f"🔌 使用 OllamaEmbeddings (Model: {OPENAI_OLLAMA_EMBEDDING_MODEL})...")
+        # OllamaEmbeddings 不需要 /v1 后缀
         base_url = OPENAI_OLLAMA_BASE_URL.replace("/api/generate", "").replace("/v1", "").rstrip("/")
-        return OllamaEmbeddings(base_url=base_url, model=OPENAI_OLLAMA_EMBEDDING_MODEL)
+        return OllamaEmbeddings(
+            base_url=base_url,
+            model=OPENAI_OLLAMA_EMBEDDING_MODEL
+        )
+    elif EMBEDDING_TYPE == 'local_vllm':
+        print(f"🔌 使用 Vllm OpenAIEmbeddings (Model: {VLLM_OPENAI_EMBEDDING_MODEL})...")
+        return OpenAIEmbeddings(
+            model=VLLM_OPENAI_EMBEDDING_MODEL,
+            openai_api_key=VLLM_OPENAI_EMBEDDING_API_KEY,
+            openai_api_base=VLLM_OPENAI_EMBEDDING_BASE_URL,
+            # 关闭本地 Token 检查，强制发送纯文本
+            check_embedding_ctx_length=False
+        )
     else:
         return OpenAIEmbeddings(
             model=EMBEDDING_MODEL,
             openai_api_key=OPENAI_API_KEY,
-            openai_api_base=OPENAI_BASE_URL
+            openai_api_base=OPENAI_OLLAMA_BASE_URL
         )
 
 def _resolve_data(data: Union[Dict, List, None]) -> Union[Dict, List, None]:

@@ -97,6 +97,8 @@ class PersistentFetcher:
             try:
                 # 设置页面加载超时
                 await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+
+                await page.wait_for_timeout(random.randint(1000, 3000))
                 
                 if max_scrolls > 0:
                     await self._auto_scroll(page, max_scrolls)
