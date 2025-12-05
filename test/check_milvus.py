@@ -4,7 +4,7 @@ from pymilvus import connections, Collection, utility
 def inspect_milvus_advanced():
     print("🔌 正在连接 Milvus (localhost:19530)...")
     try:
-        connections.connect(alias="default", host="localhost", port="19530")
+        connections.connect(alias="default", host="172.23.216.104", port="19530")
     except Exception as e:
         print(f"❌ 连接失败: {e}")
         return
