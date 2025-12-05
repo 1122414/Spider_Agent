@@ -203,8 +203,6 @@ def qa_interaction(question: str) -> str:
     )
 
     try:
-        os.environ.pop("http_proxy", None)
-        os.environ.pop("https_proxy", None)
         # --- Step 1: 连接 Milvus ---
         vector_store = Milvus(
             embedding_function=embeddings,
