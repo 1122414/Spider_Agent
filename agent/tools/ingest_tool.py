@@ -19,16 +19,6 @@ from config import *
 
 load_dotenv()
 
-# ========================== 配置区域 ==========================
-# MILVUS_URI = os.environ.get("MILVUS_URI", "http://localhost:19530")
-# COLLECTION_NAME = "spider_knowledge_base"
-
-# # Embedding 配置
-# EMBEDDING_MODEL = os.environ.get("MODA_EMBEDDING_MODEL", "text-embedding-3-small")
-# OPENAI_API_KEY = os.environ.get("MODA_OPENAI_API_KEY")
-# OPENAI_BASE_URL = os.environ.get("MODA_OPENAI_BASE_URL")
-# OPENAI_OLLAMA_BASE_URL = os.environ.get("MODA_OLLAMA_BASE_URL", OPENAI_BASE_URL)
-
 def get_embedding_model():
     """
     工厂函数：自动选择 OpenAI 或 Ollama 嵌入模型
@@ -223,8 +213,6 @@ def save_to_milvus(data: Union[Dict, List] = None, category: str = "general") ->
     print(f"🔄 准备处理 {len(valid_docs)} 条数据片段...")
 
     try:
-        os.environ.pop("http_proxy", None)
-        os.environ.pop("https_proxy", None)
         embeddings = get_embedding_model()
 
         # 手动计算向量 (防止 429)
@@ -266,6 +254,15 @@ def save_to_milvus(data: Union[Dict, List] = None, category: str = "general") ->
         if not text_embeddings:
             return "保存失败: 所有数据向量化均失败。"
 
+        index_params = {
+            "metric_type": "IP",         # 推荐: RAG用 "IP" 或 "COSINE"
+            "index_type": "HNSW",        # 索引类型
+            "params": {
+                "M": 16,                 # 节点最大连接数
+                "efConstruction": 250    # 索引构建深度
+            }
+        }
+
         print(f"✅ 向量计算完成 ({len(text_embeddings)} 条)，准备存入 Milvus...")
 
         vector_store = Milvus(
@@ -273,7 +270,8 @@ def save_to_milvus(data: Union[Dict, List] = None, category: str = "general") ->
             connection_args={"uri": MILVUS_URI},
             collection_name=COLLECTION_NAME,
             auto_id=True,
-            drop_old=False
+            drop_old=True,
+            index_params=index_params
         )
         
         vector_store.add_embeddings(
