@@ -1,6 +1,7 @@
 import os
 import time
 import json
+import httpx
 import random
 from typing import List, Dict, Any, Union
 from dotenv import load_dotenv
@@ -32,6 +33,7 @@ def get_embedding_model():
     """
     工厂函数：自动选择 OpenAI 或 Ollama 嵌入模型
     """
+    http_client = httpx.Client(trust_env=False, timeout=60.0)
     if EMBEDDING_TYPE == 'local_ollama':
         print(f"🔌 使用 OllamaEmbeddings (Model: {OPENAI_OLLAMA_EMBEDDING_MODEL})...")
         # OllamaEmbeddings 不需要 /v1 后缀
@@ -46,6 +48,7 @@ def get_embedding_model():
             model=VLLM_OPENAI_EMBEDDING_MODEL,
             openai_api_key=VLLM_OPENAI_EMBEDDING_API_KEY,
             openai_api_base=VLLM_OPENAI_EMBEDDING_BASE_URL,
+            http_client=http_client,
             # 关闭本地 Token 检查，强制发送纯文本
             check_embedding_ctx_length=False
         )
@@ -100,7 +103,7 @@ def _extract_items_from_structure(data: Any) -> List[Dict]:
             
     return []
 
-def _flatten_data_to_documents(data: Union[List, Dict]) -> List[Document]:
+def _flatten_data_to_documents(data: Union[List, Dict], category: str = "general") -> List[Document]:
     """
     通用版数据扁平化：自适应各种字段名
     """
@@ -144,35 +147,37 @@ def _flatten_data_to_documents(data: Union[List, Dict]) -> List[Document]:
                     title = v
                     break
 
-        # --- B. 构建全字段文本 (Flatten All Fields) ---
+        # 基础 Metadata
+        base_metadata = {
+            "source": url, 
+            "title": title, 
+            "category": category  # <--- 新增字段
+        }
+
+        # --- B. 构建全字段文本 ---
         content_parts = []
-        
-        # 第一层字段
         for k, v in item.items():
-            # 跳过特殊字段和空值
             if k in ["children", "target_content", "items"] or v is None: 
                 continue
-            
-            # 转换为字符串
             val_str = str(v).strip()
             if not val_str: continue
-            
-            # 格式化: "商品名: 洋奢发热保暖..."
             content_parts.append(f"{k}: {val_str}")
         
         parent_text = "\n".join(content_parts)
         
         if parent_text and len(parent_text) > 5:
+            # 合并 metadata
+            meta = base_metadata.copy()
+            meta["type"] = "parent_info"
+            
             doc = Document(
                 page_content=parent_text,
-                metadata={"source": url, "title": title, "type": "parent_info"}
+                metadata=meta
             )
             documents.append(doc)
             
-        # --- C. 递归处理 Children (如有) ---
+        # --- C. 递归处理 Children ---
         children = item.get("children", [])
-        # 有些网站可能把子列表叫 sub_items 等，这里可以扩展
-        
         if isinstance(children, list):
             for child in children:
                 if not isinstance(child, dict): continue
@@ -184,17 +189,21 @@ def _flatten_data_to_documents(data: Union[List, Dict]) -> List[Document]:
                         child_parts.append(f"{k}: {val_str}")
                 
                 if child_parts:
-                    # 将父级 title 拼接到子级内容中，保持上下文
                     child_text = f"《{title}》的详细信息:\n" + "\n".join(child_parts)
+                    
+                    # 合并 metadata
+                    child_meta = base_metadata.copy()
+                    child_meta["type"] = "child_detail"
+                    
                     child_doc = Document(
                         page_content=child_text,
-                        metadata={"source": url, "title": title, "type": "child_detail"}
+                        metadata=child_meta
                     )
                     documents.append(child_doc)
                     
     return documents
 
-def save_to_milvus(data: Union[Dict, List] = None) -> str:
+def save_to_milvus(data: Union[Dict, List] = None, category: str = "general") -> str:
     """
     将数据存入 Milvus 向量知识库 (稳健版)
     """
@@ -203,8 +212,8 @@ def save_to_milvus(data: Union[Dict, List] = None) -> str:
         return "保存失败: 没有有效数据"
 
     # 转换数据
-    docs = _flatten_data_to_documents(actual_data)
-    
+    docs = _flatten_data_to_documents(actual_data, category=category)
+
     # 过滤空文档
     valid_docs = [d for d in docs if d.page_content and d.page_content.strip()]
     
@@ -214,6 +223,8 @@ def save_to_milvus(data: Union[Dict, List] = None) -> str:
     print(f"🔄 准备处理 {len(valid_docs)} 条数据片段...")
 
     try:
+        os.environ.pop("http_proxy", None)
+        os.environ.pop("https_proxy", None)
         embeddings = get_embedding_model()
 
         # 手动计算向量 (防止 429)
@@ -262,7 +273,7 @@ def save_to_milvus(data: Union[Dict, List] = None) -> str:
             connection_args={"uri": MILVUS_URI},
             collection_name=COLLECTION_NAME,
             auto_id=True,
-            drop_old=True 
+            drop_old=False
         )
         
         vector_store.add_embeddings(

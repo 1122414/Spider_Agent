@@ -116,7 +116,12 @@ def setup_system():
         tool_name="save_to_knowledge_base",
         description="""
         将爬取的数据存入 Milvus 向量知识库，以便后续进行 RAG 问答。
-        无需参数，自动使用上一步爬取的数据。
+        
+        参数:
+        - data: (可选) 要保存的数据。不传则自动使用上一步爬取的数据。
+        - category: (必填) 数据的大类标签，必须是英文小写。
+          常用值参考: 'movie' (电影), 'book' (书籍), 'guide' (攻略), 'news' (新闻), 'general' (通用)。
+          请根据当前爬取内容的类型自动判断并填入。
         """,
         func=save_to_milvus
     )
