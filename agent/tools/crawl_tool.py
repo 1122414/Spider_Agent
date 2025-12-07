@@ -118,6 +118,7 @@ class PersistentFetcher:
         finally:
             # 关键：只关闭 Page，不关闭 Context
             await page.close()
+            pass
 
         if error_msg:
             return {"url": url, "error": error_msg}

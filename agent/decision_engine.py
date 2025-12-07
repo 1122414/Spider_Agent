@@ -85,7 +85,7 @@ class DecisionEngine:
                 # invoke 返回的直接是 AgentDecisionSchema 的实例对象
                 decision_obj: AgentDecisionSchema = self.structured_llm.invoke(messages)
                 
-                # 转为字典方便处理
+                # 转为字典方便处理  model对象的函数  继承BaseModel
                 decision = decision_obj.model_dump()
                 
             except Exception as e:

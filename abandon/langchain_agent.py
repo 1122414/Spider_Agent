@@ -3,7 +3,7 @@ import json
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
-from langchain.output_parsers import StructuredOutputParser, ResponseSchema
+from langchain_core.output_parsers import StructuredOutputParser, ResponseSchema
 
 from agent.prompt_template import FIND_URL_SYSTEM_PROMPT
 # 修改引入：引入新的同步包装函数 sync_playwright_fetch

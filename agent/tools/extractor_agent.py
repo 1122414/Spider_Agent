@@ -12,10 +12,6 @@ from config import *
 
 load_dotenv()
 
-# MODA_OPENAI_API_KEY = os.environ.get("MODA_OPENAI_API_KEY")
-# MODA_OPENAI_BASE_URL = os.environ.get("MODA_OPENAI_BASE_URL")
-# MODEL_NAME = os.environ.get("MODA_MODEL_NAME", "gpt-4o-mini")
-
 class ExtractorAgent:
     def __init__(self):
         self.llm = ChatOpenAI(
@@ -63,11 +59,20 @@ class ExtractorAgent:
                 print(f"✅ 第 {i+1} 块提取到 {len(items)} 条数据")
             
             # 2. 收集 next_page_url 
-            # 翻页链接通常在页面的底部（即最后几个块中）
-            # 如果后面的块发现了翻页链接，覆盖之前的
+            # 翻页链接通常在页面的底部（即最后几个块中），但也可能在中间（如“更多”按钮）
+            # 策略：只要发现有效翻页链接，就记录下来。后续块如果发现新的，可以覆盖（假设底部的是真正的下一页）
+            # 或者：优先保留包含 "page" 或数字的链接
             if chunk_result.get("next_page_url"):
-                detected_next_page = chunk_result["next_page_url"]
-                print(f"      🔎 第 {i+1} 块发现了翻页链接: {detected_next_page}")
+                new_next = chunk_result["next_page_url"]
+                # 简单的去重/优先级逻辑：如果之前没找到，或者新找到的看起来更像分页
+                if not detected_next_page:
+                    detected_next_page = new_next
+                    print(f"      🔎 第 {i+1} 块发现了翻页链接: {detected_next_page}")
+                elif new_next != detected_next_page:
+                    # 如果这块也找到了不一样的链接，可能是底部的"下一页"覆盖了中间的"更多"
+                    # 通常底部的优先级更高
+                    detected_next_page = new_next
+                    print(f"      🔄 第 {i+1} 块更新了翻页链接: {detected_next_page}")
 
         print(f"📦 分块提取完成，原始总条数: {len(all_items)}")
 
@@ -78,6 +83,33 @@ class ExtractorAgent:
             "items": final_items,
             "next_page_url": detected_next_page
         }
+    
+    def _try_extract_next_page_by_regex(self, text: str) -> Union[str, None]:
+        """
+        【新增】正则兜底提取：当 LLM 忽略时，暴力从 Markdown 中查找导航链接
+        针对: [更多 __](https://...) 或 [下一页](...)
+        """
+        # 关键词：更多, Next, 下一页, 下页, More, >>, »
+        keywords = r"(更多|Next|下一页|下页|More|>>|»)"
+        
+        # Regex 解释:
+        # \[\s* 匹配 [ 和空白
+        # ([^\]]*?keywords[^\]]*?) 匹配包含关键词的文本 (Group 1: Link Text)
+        # \s*\]           匹配 ] 和空白
+        # \((https?://[^)]+)\)     匹配 (URL) (Group 2: URL)
+        
+        pattern = re.compile(r'\[\s*([^\]]*?' + keywords + r'[^\]]*?)\s*\]\((https?://[^)]+)\)', re.IGNORECASE)
+        
+        matches = pattern.findall(text)
+        if matches:
+            # 可能会匹配到多个，比如 [更多电影] [更多新闻]
+            # 策略：优先返回第一个匹配到的有效 HTTP 链接
+            for link_text, kw, url in matches:
+                # 排除明显无关的链接
+                if "APP" in link_text or "下载" in link_text:
+                    continue
+                return url
+        return None
 
     def _process_single_chunk(self, chunk_text: str, target: List[str], source: str) -> Dict[str, Any]:
         """
@@ -100,20 +132,27 @@ class ExtractorAgent:
         final_structure = {"items": [], "next_page_url": None}
 
         if isinstance(raw_result, dict):
-            # 情况 A: 标准返回 {"items": [...], "next_page_url": "..."}
+            # 情况 A: 标准返回
             if "items" in raw_result:
                 final_structure["items"] = raw_result["items"] if isinstance(raw_result["items"], list) else []
                 final_structure["next_page_url"] = raw_result.get("next_page_url")
-            # 情况 B: LLM 还是返回了旧格式的单个对象 (虽然 Prompt 禁止了)
-            elif "items" not in raw_result: 
-                 # 尝试把整个 dict 当作一个 item，排除 error 字段的情况
-                 if "error" not in raw_result:
-                     final_structure["items"] = [raw_result]
+            # 情况 B: 旧格式单个对象
+            elif "items" not in raw_result and "error" not in raw_result: 
+                 final_structure["items"] = [raw_result]
 
         elif isinstance(raw_result, list):
-            # 情况 C: LLM 返回了纯列表 (旧格式)
+            # 情况 C: 纯列表
             final_structure["items"] = raw_result
         
+        # ============================================================
+        # 【关键修复】正则兜底检测翻页链接
+        # ============================================================
+        if not final_structure.get("next_page_url"):
+            fallback_url = self._try_extract_next_page_by_regex(chunk_text)
+            if fallback_url:
+                print(f"      🔎 [Regex Fallback] LLM未识别，但正则提取到翻页链接: {fallback_url}")
+                final_structure["next_page_url"] = fallback_url
+
         return final_structure
 
     def _split_text_by_lines(self, text: str, max_length: int) -> List[str]:
@@ -124,32 +163,22 @@ class ExtractorAgent:
         current_length = 0
         
         for line in lines:
-            line_len = len(line) + 1 # +1 是考虑换行符
+            line_len = len(line) + 1 
             
-            # --- 修复开始：处理单行超长的情况 ---
             if line_len > max_length:
-                # 1. 先把手头积攒的 current_chunk 存掉
                 if current_chunk:
                     chunks.append("\n".join(current_chunk))
                     current_chunk = []
                     current_length = 0
                 
-                # 2. 循环切分当前这行超长的文本
-                # 比如 line 有 70k，max_length 是 30k，这里会切成 30k, 30k, 10k
                 while len(line) > max_length:
-                    # 切下前 max_length 个字符作为一个单独的 chunk
                     chunks.append(line[:max_length])
-                    # 把剩下的部分赋值回 line，继续处理
                     line = line[max_length:]
                 
-                # 3. 剩下的部分（也就是 < max_length 的部分）不能丢
-                # 把它作为新 chunk 的开头，放入 current_chunk
                 current_chunk = [line]
                 current_length = len(line) + 1
                 continue 
-            # --- 修复结束 ---
 
-            # 下面是正常行的处理逻辑（保持不变）
             if current_length + line_len > max_length:
                 chunks.append("\n".join(current_chunk))
                 current_chunk = [line]
@@ -158,7 +187,6 @@ class ExtractorAgent:
                 current_chunk.append(line)
                 current_length += line_len
         
-        # 处理最后剩下的 residue
         if current_chunk:
             chunks.append("\n".join(current_chunk))
             
@@ -166,29 +194,24 @@ class ExtractorAgent:
 
     def _parse_json_safely(self, text: str) -> Union[List, Dict]:
         """安全解析 JSON"""
-        # 1. 尝试直接解析
         try:
             return json.loads(text)
         except:
             pass
 
-        # 2. 清洗 Markdown 代码块标记
         cleaned = text.replace("```json", "").replace("```", "").strip()
         try:
             return json.loads(cleaned)
         except:
             pass
 
-        # 3. 正则提取：优先尝试提取对象结构 {...} (新 Prompt 要求返回对象)
         try:
-            # dotall 模式，让 . 匹配换行符
             match = re.search(r'\{[\s\S]*\}', text) 
             if match:
                 return json.loads(match.group(0))
         except:
             pass
 
-        # 4. 正则提取：兜底尝试提取数组 [...] (防止 LLM 返回旧格式)
         try:
             match = re.search(r'\[[\s\S]*\]', text)
             if match:
