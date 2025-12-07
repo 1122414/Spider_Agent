@@ -24,10 +24,6 @@ from config import *
 # 加载环境变量
 load_dotenv()
 
-# MODA_OPENAI_API_KEY = os.environ.get("MODA_OPENAI_API_KEY")
-# MODA_OPENAI_BASE_URL = os.environ.get("MODA_OPENAI_BASE_URL")
-# MODEL_NAME = os.environ.get("MODA_MODEL_NAME", "gpt-4o-mini")
-
 def setup_system():
     """系统初始化与装配"""
     print(">>> 系统初始化中...")

@@ -71,8 +71,8 @@ def inspect_milvus_advanced():
     random_offset = random.randint(0, max(0, total_count - 1))
     sample_results = collection.query(
         expr="pk >= 0",
-        limit=2,
-        offset=random_offset, # 跳过前面的数据，看后面的
+        limit=200,
+        # offset=random_offset, # 跳过前面的数据，看后面的
         output_fields=["title", "text", "source"]
     )
     
@@ -80,7 +80,7 @@ def inspect_milvus_advanced():
         print("-" * 50)
         print(f"Title : {res.get('title')}")
         print(f"Source: {res.get('source')}")
-        print(f"Text  : {res.get('text')[:100]}...") # 只显示前100字
+        print(f"Text  : {res.get('text')}") 
 
 if __name__ == "__main__":
     inspect_milvus_advanced()
