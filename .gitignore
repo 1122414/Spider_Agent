@@ -3,4 +3,7 @@
 *.log
 *.csv
 *.json
+test
+output
+chroma_data
 browser_data
