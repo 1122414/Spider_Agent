@@ -48,6 +48,7 @@ def setup_system():
         - url: 目标网址 (String)
         - target: 需要提取的字段列表 (List[str])
         - max_scrolls: 最大滚动次数，用于触发懒加载 (int, 默认0)
+        - wait_time: 延迟时间 (int, 默认1000)。
         """,
         func=sync_playwright_fetch
     )
@@ -66,8 +67,10 @@ def setup_system():
         - max_items: (可选) 每一页递归抓取的最大条目数 (int, 默认3)。
         - max_pages: (可选) 每一层列表页的最大翻页数 (int, 默认3)。
         - max_scrolls: (可选) 滚动次数 (int, 默认1)。
+        - max_nodes: (可选) 生成的网页骨架最大节点数，若爬取不到用户需要的信息可以逐步增加 (int, 默认200)。
         - headless: (可选) 是否使用无头模式 (bool, 默认False)。
           默认为 False (显示浏览器) 以最大程度绕过反爬检测。如果追求速度可设为 True。
+        - wait_time: (可选) 等待时间 (int, 默认1000)。
         """,
         func=sync_hierarchical_crawl
     )
