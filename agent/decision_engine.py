@@ -14,7 +14,7 @@ class AgentDecisionSchema(BaseModel):
     """Agent 的决策结构，包含思考过程和行动指令"""
     
     thought: str = Field(
-        ..., 
+        default="",
         description="你的思考过程：分析当前状态、评估上一步结果、决定下一步计划。"
     )
     action: Literal["next", "stop"] = Field(
