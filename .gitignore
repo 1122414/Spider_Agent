@@ -3,6 +3,7 @@
 *.log
 *.csv
 *.json
+*.html
 test
 output
 chroma_data

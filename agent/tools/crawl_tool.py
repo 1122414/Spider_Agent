@@ -1,10 +1,11 @@
 import re
 import random
 import asyncio
-import nest_asyncio
+import nest_asyncio 
 import os
 from typing import List, Dict, Any, Set, Union, Optional
 from urllib.parse import urljoin
+from DrissionPage import Chromium
 
 # 引入原生 Playwright
 from playwright.async_api import async_playwright, BrowserContext, Page
@@ -81,57 +82,32 @@ class PersistentFetcher:
         """
         执行单页面抓取 (复用已打开的浏览器)
         """
+
         if not self.context:
             await self.start()
 
         print(f"🕷️ Fetching: {url}")
+
+        # DrissionPage
+        browser = Chromium()
+        tab = browser.latest_tab
+
+        tab.get(url)
+        tab.wait(5,10)
+
+        raw_html = tab.html
+
+        print("🧹 CrawlTool: Pre-cleaning HTML noise (Style/Script/SVG)...")
+        cleaned_html = re.sub(r'<style[^>]*>.*?</style>', '', raw_html, flags=re.DOTALL | re.IGNORECASE)
+        cleaned_html = re.sub(r'<script[^>]*>.*?</script>', '', cleaned_html, flags=re.DOTALL | re.IGNORECASE)
+        cleaned_html = re.sub(r'<!--.*?-->', '', cleaned_html, flags=re.DOTALL)
+        cleaned_html = re.sub(r'<svg[^>]*>.*?</svg>', '', cleaned_html, flags=re.DOTALL | re.IGNORECASE)
         
-        # 创建新标签页而不是新浏览器
-        page = await self.context.new_page() 
-        
-        raw_html = ""
-        error_msg = None
-        target_content = {}
+        # 简单去除多余空行，进一步压缩体积
+        cleaned_html = re.sub(r'\n\s*\n', '\n', cleaned_html)
 
-        try:
-            try:
-                # 设置页面加载超时
-                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-
-                await page.wait_for_timeout(random.randint(wait_time, wait_time + 3000))
-                
-                if max_scrolls > 0:
-                    await self._auto_scroll(page, max_scrolls)
-                else:
-                    await page.wait_for_timeout(wait * 1000)
-
-                raw_html = await page.content()
-
-            except Exception as e:
-                print(f"⚠️ Page load warning: {e}")
-                # 即使报错，尝试获取已加载的内容
-                raw_html = await page.content()
-
-        except Exception as e:
-            error_msg = f"Playwright Critical Error: {str(e)}"
-        
-        finally:
-            # 关键：只关闭 Page，不关闭 Context
-            await page.close()
-            pass
-
-        if error_msg:
-            return {"url": url, "error": error_msg}
-
-        if not raw_html:
-            return {"url": url, "error": "Failed to load content"}
-
-        # --- 数据清洗与提取 ---
-        docs = [Document(page_content=raw_html, metadata={"source": url})]
-
-        # extrator_agent_bck 原版使用
-        # transformed_docs = self.html2text.transform_documents(docs)
-        # pure_text = transformed_docs[0].page_content if transformed_docs else ""
+        with open('test.html', 'w', encoding='utf-8') as f:
+            f.write(cleaned_html)
 
         # extrator_agent 新版
         match = re.search(r"<title>(.*?)</title>", raw_html, re.S | re.I)
@@ -143,7 +119,7 @@ class PersistentFetcher:
             # 旧版
             # target_content = self.extractor.get_content(pure_text, target, url)
             # 新版（测试中，12.8）
-            target_content = self.extractor.get_content(raw_html, target, url, max_nodes=max_nodes)
+            target_content = self.extractor.get_content(cleaned_html, target, url, max_nodes=max_nodes)
         except Exception as e:
             target_content = {"items": [], "next_page_url": None, "error": str(e)}
 
